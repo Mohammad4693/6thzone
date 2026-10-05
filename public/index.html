@@ -9,6 +9,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="preload" as="image" href="/images/tower-base.jpg">
+  <link rel="preload" as="image" href="/images/tower-cutout.png">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body id="top">
@@ -140,11 +142,12 @@
         </div>
         <aside class="hero-facts" aria-label="The 6thzone framework at a glance" id="hero-facts"></aside>
       </div>
-      <div class="hero-panel">
-        <div class="hero-visual" id="hero-visual">
-          <div class="sculpture-slot" data-sculpture></div>
+      <div class="hero-media" id="hero-visual">
+        <div class="hero-panel">
+          <img class="hero-photo" src="/images/tower-base.jpg" alt="A tall tower rising above a sea of clouds at dusk" width="736" height="1472" fetchpriority="high">
+          <p class="hero-caption">Five zones.<br>Connected by intelligence.</p>
         </div>
-        <p class="hero-caption">Five zones.<br>Connected by intelligence.</p>
+        <img class="hero-cutout" src="/images/tower-cutout.png" alt="" aria-hidden="true" width="736" height="1472">
       </div>
     </section>
 

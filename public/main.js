@@ -59,30 +59,13 @@
     reveals.forEach(function (el) { io.observe(el); });
   }
 
-  /* ---------- hero: connector activation on first scroll ---------- */
-  var heroPanel = document.querySelector('.hero-panel');
-  function connectZones() {
-    if (!heroPanel.classList.contains('zones-connected')) heroPanel.classList.add('zones-connected');
-  }
-  if (reducedMotion) {
-    connectZones();
-  } else {
-    var onFirstScroll = function () {
-      if (window.scrollY > 40) { clearTimeout(fallbackTimer); connectZones(); window.removeEventListener('scroll', onFirstScroll); }
-    };
-    var fallbackTimer = window.setTimeout(function () {
-      connectZones();
-      window.removeEventListener('scroll', onFirstScroll);
-    }, 3500); // ensure the structure completes even if no scroll event fires
-    window.addEventListener('scroll', onFirstScroll, { passive: true });
-
-    /* subtle synchronized parallax on the sculpture (one unit, no seams) */
-    var heroVisual = document.getElementById('hero-visual');
+  /* ---------- hero: subtle synchronized parallax on base photo + cutout (one unit, no seams) ---------- */
+  var heroMedia = document.querySelector('.hero-media');
+  if (!reducedMotion && heroMedia) {
     window.addEventListener('scroll', function () {
-      if (reducedMotion) return;
-      var rect = heroVisual.getBoundingClientRect();
-      var shift = Math.max(-28, Math.min(28, -rect.top * 0.045));
-      heroVisual.style.setProperty('--py', shift.toFixed(1) + 'px');
+      var rect = heroMedia.getBoundingClientRect();
+      var shift = Math.max(-24, Math.min(24, -rect.top * 0.04));
+      heroMedia.style.setProperty('--py', shift.toFixed(1) + 'px');
     }, { passive: true });
   }
 

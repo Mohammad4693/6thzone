@@ -20,7 +20,7 @@ docker compose -f docker-compose.base44.yml up -d
 - `public/styles.css` — all styling. Tokens at `:root` (bg #F5F5F2, ink #111, accent #F36B32, dark #151515).
 
 ## Quirks
-- The hero sculpture extends above the panel via an absolutely-positioned transparent SVG (no clipping seam by design). Keep `.hero-panel` `overflow: visible`; only its background layer is rounded.
+- The hero visual is the Burj Khalifa photo: `.hero-photo` (full image, inside the clipped panel) and `.hero-cutout` (same image with sky removed, clipped to the band that breaks out above the panel). Both use the same width/`translateY(-30%)` and one shared `--py` parallax var, so they stay pixel-aligned with no seam. Panel proportions are fixed by `aspect-ratio` so the percentage clip stays exact; the mobile media query overrides both values.
 - `.zones-connected` (added to the hero panel on first scroll) drives the orange connector/glow activation via CSS transitions. `.always-connected` slots (services/why sections) are permanently activated.
 - No external credentials are required; no third-party API keys.
 - Verify quickly: `curl localhost:3000/healthz`, `curl -X POST localhost:3000/api/contact -H 'Content-Type: application/json' -d '{"name":"t","email":"t@t.co"}'`.

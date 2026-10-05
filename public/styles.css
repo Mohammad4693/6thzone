@@ -223,26 +223,38 @@ header.site-header { max-width: var(--maxw); margin: 0 auto; }
   margin-top: 4px;
 }
 
+.hero-media { position: relative; }
+
 .hero-panel {
   position: relative;
   border-radius: 18px;
-  height: clamp(380px, 44vw, 600px);
-  background:
-    radial-gradient(58% 62% at 50% 30%, #EFEFEA 0%, rgba(239, 239, 234, 0) 70%),
-    linear-gradient(180deg, #ECECE8 0%, #E2E2DE 100%);
-  overflow: visible; /* the sculpture extends above the panel */
+  overflow: hidden; /* only the base photo clips to the rounded panel */
+  background: #1D1D21;
+  aspect-ratio: 2.226; /* keeps the out-of-frame crop proportional at every width */
 }
 
-.hero-visual {
+/* Base photo and cutout come from the same image, share scale and offset,
+   and move as one synchronized unit — no seam where they overlap.
+   The cutout sits OUTSIDE the clipped panel so it can break the frame. */
+.hero-photo,
+.hero-cutout {
   position: absolute;
-  left: 50%;
-  bottom: clamp(18px, 4.5%, 42px);
-  width: clamp(250px, 44vw, 600px);
-  transform: translate(-50%, var(--py, 0px));
-  will-change: transform;
-  z-index: 2;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: auto;
+  transform: translateY(calc(-30% + var(--py, 0px)));
 }
-.hero-visual .sculpture { width: 100%; height: auto; }
+.hero-cutout {
+  /* reveals only the tower column in the band that breaks the frame */
+  clip-path: inset(22% 52% 47.5% 26%);
+  /* soft fade at the top of the breakout — no hard cut edge */
+  -webkit-mask-image: linear-gradient(180deg, transparent 22%, #000 27%, #000 100%);
+  mask-image: linear-gradient(180deg, transparent 22%, #000 27%, #000 100%);
+  z-index: 2;
+  pointer-events: none;
+  will-change: transform;
+}
 
 .hero-caption {
   position: absolute;
@@ -253,7 +265,8 @@ header.site-header { max-width: var(--maxw); margin: 0 auto; }
   font-weight: 500;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--ink-2);
+  color: #EDEDE9;
+  text-shadow: 0 1px 14px rgba(0, 0, 0, 0.5);
   z-index: 3;
 }
 
@@ -839,8 +852,12 @@ dialog#explorer::backdrop { background: rgba(17, 17, 17, 0.42); }
   .ht-1 { margin-left: 0; }
   .ht-2 { margin-right: 0; }
 
-  .hero-panel { height: clamp(300px, 78vw, 420px); }
-  .hero-visual { width: min(78vw, 420px); bottom: 14px; }
+  .hero-panel { aspect-ratio: 1.1; }
+  .hero-cutout {
+    clip-path: inset(17% 52% 24.5% 26%);
+    -webkit-mask-image: linear-gradient(180deg, transparent 17%, #000 22%, #000 100%);
+    mask-image: linear-gradient(180deg, transparent 17%, #000 22%, #000 100%);
+  }
 
   .zones-track { grid-template-columns: 1fr; padding-top: 8px; gap: 0; }
   .zones-track::before { display: none; }
