@@ -44,7 +44,6 @@ router.post('/register', async (req, res) => {
       phone: normalizedPhone,
       code,
       expiresAt: new Date(Date.now() + CODE_EXPIRY_MINUTES * 60 * 1000),
-      userId: user.id,
     },
   });
 

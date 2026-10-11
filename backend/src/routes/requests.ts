@@ -169,6 +169,9 @@ router.get('/:id', async (req: AuthRequest, res) => {
     // Hide AI drafts from member view (mentor sees them)
   }
 
+  // Access to case files is logged for the record (سؤال ۹: لاگ دسترسی به پرونده‌ها)
+  logAudit(req.userId!, 'VIEW_CASE', 'Request', id, { role: req.userRole });
+
   // For members, strip AI drafts
   if (req.userRole === 'MEMBER') {
     (request as any).aiDrafts = [];

@@ -35,6 +35,16 @@ async function main() {
     create: { key: 'data_retention_days', value: '365' },
     update: {},
   });
+  await prisma.setting.upsert({
+    where: { key: 'clarify_target_hours' },
+    create: { key: 'clarify_target_hours', value: '24' },
+    update: {},
+  });
+  await prisma.setting.upsert({
+    where: { key: 'case_expiry_hours' },
+    create: { key: 'case_expiry_hours', value: '72' },
+    update: {},
+  });
 
   // Create first admin user
   const adminPhone = '+989000000001';

@@ -14,6 +14,7 @@ import AdminRequestsPage from './pages/AdminRequestsPage';
 import AdminMentorsPage from './pages/AdminMentorsPage';
 import AdminSettingsPage from './pages/AdminSettingsPage';
 import AdminReportsPage from './pages/AdminReportsPage';
+import AdminSessionsPage from './pages/AdminSessionsPage';
 import MentorCasePage from './pages/MentorCasePage';
 import BriefPage from './pages/BriefPage';
 import './index.css';
@@ -52,6 +53,7 @@ export default function App() {
           <Route path="/admin/requests" element={<ProtectedRoute roles={['ADMIN']}><AdminRequestsPage /></ProtectedRoute>} />
           <Route path="/admin/mentors" element={<ProtectedRoute roles={['ADMIN']}><AdminMentorsPage /></ProtectedRoute>} />
           <Route path="/admin/settings" element={<ProtectedRoute roles={['ADMIN']}><AdminSettingsPage /></ProtectedRoute>} />
+          <Route path="/admin/sessions" element={<ProtectedRoute roles={['ADMIN']}><AdminSessionsPage /></ProtectedRoute>} />
           <Route path="/admin/reports" element={<ProtectedRoute roles={['ADMIN']}><AdminReportsPage /></ProtectedRoute>} />
         </Routes>
       </BrowserRouter>

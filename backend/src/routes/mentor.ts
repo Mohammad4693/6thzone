@@ -61,7 +61,55 @@ router.get('/requests/:id', requireRole('MENTOR'), async (req: AuthRequest, res)
     return res.status(403).json({ error: 'این پرونده به شما تخصیص نیافته است' });
   }
 
+  logAudit(req.userId, 'VIEW_CASE', 'Request', id, { role: 'MENTOR' });
   res.json(assignment);
+});
+
+// GET /api/mentor/availability — my weekly free windows
+router.get('/availability', requireRole('MENTOR'), async (req: AuthRequest, res) => {
+  const windows = await prisma.mentorAvailability.findMany({
+    where: { mentorId: req.userId! },
+    orderBy: [{ dayOfWeek: 'asc' }, { startMinute: 'asc' }],
+  });
+  res.json(windows);
+});
+
+// PUT /api/mentor/availability — replace my weekly free windows
+router.put('/availability', requireRole('MENTOR'), async (req: AuthRequest, res) => {
+  const { windows } = req.body as {
+    windows: { dayOfWeek: number; startMinute: number; endMinute: number }[];
+  };
+  if (!Array.isArray(windows)) {
+    return res.status(400).json({ error: 'بازه‌ها نامعتبر است' });
+  }
+  for (const w of windows) {
+    if (
+      !Number.isInteger(w.dayOfWeek) || w.dayOfWeek < 0 || w.dayOfWeek > 6 ||
+      !Number.isInteger(w.startMinute) || !Number.isInteger(w.endMinute) ||
+      w.startMinute < 0 || w.endMinute > 1440 || w.endMinute - w.startMinute < 15
+    ) {
+      return res.status(400).json({ error: 'هر بازه باید حداقل ۱۵ دقیقه باشد و روز/ساعت معتبر داشته باشد' });
+    }
+  }
+
+  await prisma.mentorAvailability.deleteMany({ where: { mentorId: req.userId! } });
+  if (windows.length > 0) {
+    await prisma.mentorAvailability.createMany({
+      data: windows.map(w => ({
+        mentorId: req.userId!,
+        dayOfWeek: w.dayOfWeek,
+        startMinute: w.startMinute,
+        endMinute: w.endMinute,
+      })),
+    });
+  }
+  logAudit(req.userId, 'UPDATE_AVAILABILITY', 'MentorAvailability', req.userId, { count: windows.length });
+
+  const saved = await prisma.mentorAvailability.findMany({
+    where: { mentorId: req.userId! },
+    orderBy: [{ dayOfWeek: 'asc' }, { startMinute: 'asc' }],
+  });
+  res.json(saved);
 });
 
 export default router;

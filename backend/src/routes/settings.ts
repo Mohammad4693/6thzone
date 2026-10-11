@@ -18,12 +18,14 @@ router.get('/', async (_req: AuthRequest, res) => {
     domains: map.domains ? JSON.parse(map.domains) : ['legal'],
     trainingVideoUrl: map.training_video_url || '',
     dataRetentionDays: parseInt(map.data_retention_days || '365'),
+    clarifyTargetHours: parseInt(map.clarify_target_hours || '24'),   // هدف جمع‌بندی از زمان تخصیص منتور
+    caseExpiryHours: parseInt(map.case_expiry_hours || '72'),          // سقف سخت بستن پرونده در صورت عدم پاسخ
   });
 });
 
 // PUT /api/settings (admin only)
 router.put('/', requireRole('ADMIN'), async (req: AuthRequest, res) => {
-  const { contributionAmount, consentText, brandImage, domains, trainingVideoUrl, dataRetentionDays } = req.body;
+  const { contributionAmount, consentText, brandImage, domains, trainingVideoUrl, dataRetentionDays, clarifyTargetHours, caseExpiryHours } = req.body;
 
   const updates: { key: string; value: string }[] = [];
   if (contributionAmount !== undefined) updates.push({ key: 'contribution_amount', value: String(contributionAmount) });
@@ -38,6 +40,8 @@ router.put('/', requireRole('ADMIN'), async (req: AuthRequest, res) => {
   if (domains !== undefined) updates.push({ key: 'domains', value: JSON.stringify(domains) });
   if (trainingVideoUrl !== undefined) updates.push({ key: 'training_video_url', value: trainingVideoUrl });
   if (dataRetentionDays !== undefined) updates.push({ key: 'data_retention_days', value: String(dataRetentionDays) });
+  if (clarifyTargetHours !== undefined) updates.push({ key: 'clarify_target_hours', value: String(clarifyTargetHours) });
+  if (caseExpiryHours !== undefined) updates.push({ key: 'case_expiry_hours', value: String(caseExpiryHours) });
 
   for (const u of updates) {
     await prisma.setting.upsert({

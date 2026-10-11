@@ -3,16 +3,55 @@ import { Link } from 'react-router-dom';
 import Layout from '../components/Layout';
 import client from '../api/client';
 
+const DAYS = ['شنبه', 'یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه'];
+
 export default function MentorDashboard() {
   const [cases, setCases] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [windows, setWindows] = useState<any[]>([]);
+  const [newWin, setNewWin] = useState({ dayOfWeek: 0, start: '10:00', end: '10:30' });
+  const [showAvail, setShowAvail] = useState(false);
 
   useEffect(() => {
     client.get('/mentor/dashboard').then(res => {
       setCases(res.data);
       setLoading(false);
     }).catch(() => setLoading(false));
+    client.get('/mentor/availability').then(res => setWindows(res.data)).catch(() => {});
   }, []);
+
+  const toMinutes = (t: string) => {
+    const [h, m] = t.split(':').map(Number);
+    return h * 60 + (m || 0);
+  };
+
+  const addWindow = async () => {
+    const startMinute = toMinutes(newWin.start);
+    const endMinute = toMinutes(newWin.end);
+    if (endMinute - startMinute < 15) {
+      alert('هر بازه باید حداقل ۱۵ دقیقه باشد');
+      return;
+    }
+    const next = [...windows, { dayOfWeek: newWin.dayOfWeek, startMinute, endMinute }];
+    try {
+      const res = await client.put('/mentor/availability', { windows: next });
+      setWindows(res.data);
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'خطا');
+    }
+  };
+
+  const removeWindow = async (idx: number) => {
+    const next = windows.filter((_, i) => i !== idx);
+    try {
+      const res = await client.put('/mentor/availability', { windows: next });
+      setWindows(res.data);
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'خطا');
+    }
+  };
+
+  const fmt = (w: any) => `${DAYS[w.dayOfWeek]} ${Math.floor(w.startMinute / 60)}:${String(w.startMinute % 60).padStart(2, '0')} تا ${Math.floor(w.endMinute / 60)}:${String(w.endMinute % 60).padStart(2, '0')}`;
 
   const formatRemaining = (ms: number) => {
     if (ms <= 0) return 'پایان یافته';
@@ -69,6 +108,45 @@ export default function MentorDashboard() {
             ))}
           </div>
         )}
+
+        {/* بازه‌های خالی برای جلسه ۱۵ دقیقه‌ای */}
+        <div className="bg-seraj-card rounded-2xl p-4 mt-6">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-bold">بازه‌های خالی من (برای جلسه ۱۵ دقیقه‌ای)</h3>
+            <button onClick={() => setShowAvail(!showAvail)} className="text-seraj-orange text-sm">
+              {showAvail ? 'بستن' : 'ویرایش'}
+            </button>
+          </div>
+          {windows.length === 0 && !showAvail && (
+            <p className="text-seraj-muted text-sm">بازه‌ای ثبت نکرده‌اید — ادمین برای هماهنگی جلسه به آن نیاز دارد</p>
+          )}
+          <div className="space-y-1">
+            {windows.map((w, i) => (
+              <div key={i} className="flex justify-between text-sm py-1">
+                <span>{fmt(w)}</span>
+                {showAvail && (
+                  <button onClick={() => removeWindow(i)} className="text-red-400 text-xs">حذف</button>
+                )}
+              </div>
+            ))}
+          </div>
+          {showAvail && (
+            <div className="flex flex-wrap gap-2 items-center mt-3">
+              <select
+                value={newWin.dayOfWeek}
+                onChange={e => setNewWin({ ...newWin, dayOfWeek: parseInt(e.target.value) })}
+                className="bg-seraj-bg border border-white/10 rounded-xl px-3 py-2 text-sm focus:border-seraj-orange focus:outline-none"
+              >
+                {DAYS.map((d, i) => <option key={i} value={i}>{d}</option>)}
+              </select>
+              <input type="time" value={newWin.start} onChange={e => setNewWin({ ...newWin, start: e.target.value })}
+                className="bg-seraj-bg border border-white/10 rounded-xl px-3 py-2 text-sm focus:border-seraj-orange focus:outline-none" />
+              <input type="time" value={newWin.end} onChange={e => setNewWin({ ...newWin, end: e.target.value })}
+                className="bg-seraj-bg border border-white/10 rounded-xl px-3 py-2 text-sm focus:border-seraj-orange focus:outline-none" />
+              <button onClick={addWindow} className="bg-seraj-orange text-seraj-bg px-4 py-2 rounded-xl text-sm font-bold">افزودن</button>
+            </div>
+          )}
+        </div>
       </div>
     </Layout>
   );

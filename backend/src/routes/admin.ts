@@ -26,6 +26,7 @@ router.get('/dashboard', requireRole('ADMIN'), async (_req: AuthRequest, res) =>
     mentors,
     unassigned,
     nearExpiry,
+    delayedCases,
     sessions,
     closedCompleted,
     closedIncomplete,
@@ -44,6 +45,7 @@ router.get('/dashboard', requireRole('ADMIN'), async (_req: AuthRequest, res) =>
         expiresAt: { lt: new Date(Date.now() + 12 * 60 * 60 * 1000) },
       },
     }),
+    prisma.assignment.count({ where: { delayHours: { gt: 0 } } }),
     prisma.session.findMany({ where: { status: { in: ['REQUESTED', 'SCHEDULED'] } }, include: { request: { include: { user: { select: { firstName: true, lastName: true } } } } } }),
     prisma.request.count({ where: { status: 'CLOSED_COMPLETED' } }),
     prisma.request.count({ where: { status: 'CLOSED_INCOMPLETE' } }),
@@ -64,6 +66,7 @@ router.get('/dashboard', requireRole('ADMIN'), async (_req: AuthRequest, res) =>
     mentors,
     unassigned,
     nearExpiry,
+    delayedCases,
     sessions,
     closedCompleted,
     closedIncomplete,
@@ -159,14 +162,24 @@ router.post('/requests/:id/assign', requireRole('ADMIN'), async (req: AuthReques
     return res.status(400).json({ error: 'این پرونده قبلاً منتور دارد' });
   }
 
+  // Read configurable hours from settings (defaults: 24h target, 72h expiry)
+  const settings = await prisma.setting.findMany({
+    where: { key: { in: ['clarify_target_hours', 'case_expiry_hours'] } },
+  });
+  const hoursMap = Object.fromEntries(settings.map(s => [s.key, parseInt(s.value)]));
+  const targetHours = hoursMap.clarify_target_hours || 24;
+  const expiryHours = hoursMap.case_expiry_hours || 72;
+
   const startedAt = new Date();
-  const expiresAt = new Date(startedAt.getTime() + 72 * 60 * 60 * 1000); // exactly 72h
+  const targetAt = new Date(startedAt.getTime() + targetHours * 60 * 60 * 1000);
+  const expiresAt = new Date(startedAt.getTime() + expiryHours * 60 * 60 * 1000);
 
   const assignment = await prisma.assignment.create({
     data: {
       requestId: id,
       mentorId,
       startedAt,
+      targetAt,
       expiresAt,
       status: 'ACTIVE',
     },
@@ -261,9 +274,14 @@ router.post('/requests/:id/close', requireRole('ADMIN'), async (req: AuthRequest
   await prisma.request.update({ where: { id }, data: { status, closedAt: new Date() } });
 
   if (request.assignment && request.assignment.status === 'ACTIVE') {
+    // Record completion time and delay vs the 24h clarify target
+    const completedAt = new Date();
+    const delayHours = request.assignment.targetAt
+      ? Math.max(0, Math.ceil((completedAt.getTime() - request.assignment.targetAt.getTime()) / 3600000))
+      : null;
     await prisma.assignment.update({
       where: { id: request.assignment.id },
-      data: { status: 'EXPIRED', closedAt: new Date() },
+      data: { status: 'EXPIRED', closedAt: completedAt, completedAt, delayHours },
     });
     await prisma.mentorProfile.update({
       where: { userId: request.assignment.mentorId },
@@ -370,16 +388,87 @@ router.get('/users', requireRole('ADMIN'), async (req: AuthRequest, res) => {
   res.json(users);
 });
 
-// POST /api/admin/sessions/:id/schedule
+// POST /api/admin/sessions/:id/schedule — schedule a 15-minute session
+// within one of the mentor's published availability windows, without overlap
 router.post('/sessions/:id/schedule', requireRole('ADMIN'), async (req: AuthRequest, res) => {
   const { id } = req.params;
   const { scheduledAt, link } = req.body;
-  const session = await prisma.session.update({
+  if (!scheduledAt) return res.status(400).json({ error: 'زمان جلسه الزامی است' });
+
+  const session = await prisma.session.findUnique({
     where: { id },
-    data: { scheduledAt: new Date(scheduledAt), link, status: 'SCHEDULED' },
+    include: { request: { include: { assignment: true } } },
   });
-  logAudit(req.userId, 'SCHEDULE_SESSION', 'Session', id);
-  res.json(session);
+  if (!session) return res.status(404).json({ error: 'جلسه یافت نشد' });
+  if (!session.request.assignment) return res.status(400).json({ error: 'پرونده منتور ندارد' });
+
+  const start = new Date(scheduledAt);
+  const end = new Date(start.getTime() + 15 * 60 * 1000); // fixed 15-minute duration
+  if (start.getTime() <= Date.now()) {
+    return res.status(400).json({ error: 'زمان جلسه باید در آینده باشد' });
+  }
+
+  // Must fall inside a published availability window of this mentor
+  const mentorId = session.request.assignment.mentorId;
+  const availability = await prisma.mentorAvailability.findMany({ where: { mentorId } });
+  if (availability.length === 0) {
+    return res.status(400).json({ error: 'این منتور هنوز زمان خالی ثبت نکرده است' });
+  }
+  // dayOfWeek: 0 = Saturday … 6 = Friday (Persian week)
+  const jsDay = start.getDay(); // 0 = Sunday … 6 = Saturday (JS)
+  const persianDay = (jsDay + 1) % 7; // shift so Persian Saturday = 0
+  const startMinute = start.getHours() * 60 + start.getMinutes();
+  const endMinute = end.getHours() * 60 + end.getMinutes() + (end.getHours() * 60 + end.getMinutes() < startMinute ? 1440 : 0);
+  const inWindow = availability.some(a =>
+    a.dayOfWeek === persianDay && startMinute >= a.startMinute && endMinute <= a.endMinute
+  );
+  if (!inWindow) {
+    return res.status(400).json({ error: 'زمان انتخابی در بازه‌های خالی منتور نیست' });
+  }
+
+  // No overlap with other scheduled sessions of the same mentor
+  const overlapping = await prisma.session.findMany({
+    where: {
+      status: 'SCHEDULED',
+      scheduledAt: { lt: end },
+      request: { assignment: { mentorId } },
+    },
+  });
+  const clash = overlapping.some(s => {
+    const sStart = s.scheduledAt!;
+    const sEnd = new Date(sStart.getTime() + 15 * 60 * 1000);
+    return start < sEnd && sStart < end;
+  });
+  if (clash) {
+    return res.status(400).json({ error: 'این زمان با جلسه دیگری همان منتور تداخل دارد' });
+  }
+
+  const updated = await prisma.session.update({
+    where: { id },
+    data: { scheduledAt: start, link, status: 'SCHEDULED' },
+  });
+  logAudit(req.userId, 'SCHEDULE_SESSION', 'Session', id, { scheduledAt: start.toISOString() });
+  res.json(updated);
+});
+
+// GET /api/admin/sessions/availability/:mentorId — mentor's published windows (for admin scheduling)
+router.get('/sessions/availability/:mentorId', requireRole('ADMIN'), async (req: AuthRequest, res) => {
+  const availability = await prisma.mentorAvailability.findMany({
+    where: { mentorId: req.params.mentorId },
+    orderBy: [{ dayOfWeek: 'asc' }, { startMinute: 'asc' }],
+  });
+  res.json(availability);
+});
+
+// GET /api/admin/access-logs — who accessed which case file
+router.get('/access-logs', requireRole('ADMIN'), async (_req: AuthRequest, res) => {
+  const logs = await prisma.auditLog.findMany({
+    where: { action: { in: ['VIEW_CASE', 'DOWNLOAD_BRIEF'] } },
+    include: { actor: { select: { firstName: true, lastName: true, role: true } } },
+    orderBy: { createdAt: 'desc' },
+    take: 100,
+  });
+  res.json(logs);
 });
 
 // POST /api/admin/sessions/:id/attendance
@@ -393,34 +482,100 @@ router.post('/sessions/:id/attendance', requireRole('ADMIN'), async (req: AuthRe
   res.json(session);
 });
 
-// GET /api/admin/reports
+// GET /api/admin/reports — pilot metrics per proposal v3
 router.get('/reports', requireRole('ADMIN'), async (_req: AuthRequest, res) => {
   const totalMembers = await prisma.user.count({ where: { role: 'MEMBER' } });
   const totalMentors = await prisma.user.count({ where: { role: 'MENTOR' } });
   const totalRequests = await prisma.request.count();
-  const completedInTime = await prisma.request.count({ where: { status: 'CLOSED_COMPLETED' } });
-  const closedIncomplete = await prisma.request.count({ where: { status: 'CLOSED_INCOMPLETE' } });
-  const feedback = await prisma.feedback.findMany({ where: { status: 'SUBMITTED' } });
 
-  const sessions = await prisma.session.findMany({ where: { status: 'COMPLETED' } });
-  const memberAttended = sessions.filter(s => s.memberAttended && s.mentorAttended).length;
+  const [closedCompleted, closedIncomplete, feedback, sessions, completedAssignments, mentorProfiles, firstFive] = await Promise.all([
+    prisma.request.count({ where: { status: 'CLOSED_COMPLETED' } }),
+    prisma.request.count({ where: { status: 'CLOSED_INCOMPLETE' } }),
+    prisma.feedback.findMany({ where: { status: 'SUBMITTED' } }),
+    prisma.session.findMany({ where: { status: 'COMPLETED' } }),
+    prisma.assignment.findMany({ where: { completedAt: { not: null } } }),
+    prisma.mentorProfile.findMany({ include: { user: { select: { firstName: true, lastName: true } } } }),
+    prisma.request.findMany({
+      where: { status: { in: ['CLOSED_COMPLETED', 'CLOSED_INCOMPLETE'] } },
+      orderBy: { closedAt: 'asc' },
+      take: 5,
+      include: { user: { select: { firstName: true, lastName: true } }, assignment: true },
+    }),
+  ]);
+
+  // 1) Attendance rate: sessions with member attendance ÷ sessions with mentor attendance (target ≥ 80%)
   const mentorAttended = sessions.filter(s => s.mentorAttended).length;
+  const memberAttended = sessions.filter(s => s.memberAttended && s.mentorAttended).length;
   const attendanceRate = mentorAttended > 0 ? Math.round((memberAttended / mentorAttended) * 100) : null;
 
+  // 2) Satisfaction: share of 4 and 5 ratings (target > 70%), with response count and response rate
   const satisfied = feedback.filter(f => f.rating >= 4).length;
   const satisfactionRate = feedback.length > 0 ? Math.round((satisfied / feedback.length) * 100) : null;
+  const eligibleForFeedback = closedCompleted + closedIncomplete;
+  const feedbackResponseRate = eligibleForFeedback > 0 ? Math.round((feedback.length / eligibleForFeedback) * 100) : null;
+
+  // 3) Mentor capacity
+  const mentorCapacity = mentorProfiles.map(m => ({
+    userId: m.userId,
+    name: `${m.user.firstName} ${m.user.lastName}`,
+    activeCount: m.activeCount,
+    capacity: m.capacity,
+    full: m.activeCount >= m.capacity,
+  }));
+
+  // 4) Review checkpoint after the first 5 cases
+  const checkpointReached = closedCompleted + closedIncomplete >= 5;
+
+  // 5) 24h-target delays (tracked since assignment)
+  const delays = completedAssignments
+    .filter(a => a.delayHours !== null)
+    .map(a => ({ requestId: a.requestId, delayHours: a.delayHours, completedAt: a.completedAt }));
+  const onTime = delays.filter(d => (d.delayHours || 0) === 0).length;
+  const delayed = delays.filter(d => (d.delayHours || 0) > 0);
+  const avgDelayHours = delayed.length > 0
+    ? Math.round((delayed.reduce((s, d) => s + (d.delayHours || 0), 0) / delayed.length) * 10) / 10
+    : 0;
 
   res.json({
     totalMembers,
     totalMentors,
     totalRequests,
-    completedInTime,
+    completedInTime: closedCompleted,
     closedIncomplete,
-    feedbackCount: feedback.length,
-    satisfactionRate,
-    satisfactionDataAvailable: feedback.length > 0,
+    // Attendance (target ≥ 80%)
     attendanceRate,
+    attendanceTarget: 80,
     attendanceDataAvailable: mentorAttended > 0,
+    attendanceSamples: { memberAttended, mentorAttended },
+    // Satisfaction (target > 70%)
+    satisfactionRate,
+    satisfactionTarget: 70,
+    satisfactionDataAvailable: feedback.length > 0,
+    feedbackCount: feedback.length,
+    feedbackResponseRate,
+    eligibleForFeedback,
+    // Mentor capacity
+    mentorCapacity,
+    // Review checkpoint after first 5 cases
+    reviewCheckpoint: {
+      reached: checkpointReached,
+      closedCases: closedCompleted + closedIncomplete,
+      firstFive: firstFive.map(r => ({
+        id: r.id,
+        member: `${r.user.firstName} ${r.user.lastName}`,
+        status: r.status,
+        closedAt: r.closedAt,
+        delayHours: r.assignment?.delayHours ?? null,
+      })),
+    },
+    // 24h clarify-target delays
+    delays: {
+      onTimeCount: onTime,
+      delayedCount: delayed.length,
+      avgDelayHours,
+      targetHours: 24,
+      dataAvailable: delays.length > 0,
+    },
     pilotCapacity: 50,
     capacityUsed: totalMembers,
     capacityAvailable: totalMembers < 50,
@@ -446,11 +601,11 @@ export const CLARITY_AXES = [
 ];
 
 export const PROGRESS_SECTIONS = [
-  'شرح مسئله',
-  'نتیجه مطلوب',
-  'ضرورت و محدودیت‌ها',
-  'اطلاعات و منابع لازم برای بررسی',
-  'جمع‌بندی نیاز',
+  'مسئله',
+  'نتیجه',
+  'قیود و هزینه',
+  'منابع و اطلاعات',
+  'قدم بعدی',
 ];
 
 export default router;

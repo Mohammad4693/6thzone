@@ -13,9 +13,9 @@ const CLARITY_AXES = [
   'موضوعات لازم برای پیگیری و ارزیابی',
 ];
 
+// شاخص شفافیت: دقیقاً ۵ بخش (پروپوزال v3)
 const PROGRESS_SECTIONS = [
-  'شرح مسئله', 'نتیجه مطلوب', 'ضرورت و محدودیت‌ها',
-  'اطلاعات و منابع لازم برای بررسی', 'جمع‌بندی نیاز',
+  'مسئله', 'نتیجه', 'قیود و هزینه', 'منابع و اطلاعات', 'قدم بعدی',
 ];
 
 export default function MentorCasePage() {
@@ -440,7 +440,8 @@ export default function MentorCasePage() {
                   { key: 'constraints', label: 'محدودیت‌ها و هزینه‌ها' },
                   { key: 'prerequisites', label: 'پیش‌نیازها' },
                   { key: 'incompleteInfo', label: 'اطلاعات ناقص' },
-                  { key: 'criteria', label: 'معیارهای بررسی منابع' },
+                  { key: 'criteria', label: 'معیارهای انتخاب منابع' },
+                  { key: 'nextStep', label: 'قدم بعدی' },
                   { key: 'openTopics', label: 'موضوعات باز' },
                 ].map(field => (
                   <div key={field.key}>

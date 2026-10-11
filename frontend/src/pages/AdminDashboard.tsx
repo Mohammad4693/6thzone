@@ -22,6 +22,7 @@ export default function AdminDashboard() {
     { label: 'در حال پیگیری', value: data?.activeRequests, color: 'text-green-400', link: '/admin/requests' },
     { label: 'بدون منتور', value: data?.unassigned, color: 'text-orange-400', link: '/admin/requests' },
     { label: 'نزدیک پایان', value: data?.nearExpiry, color: 'text-red-400', link: '/admin/requests' },
+    { label: 'با تأخیر (هدف ۲۴س)', value: data?.delayedCases, color: 'text-red-400', link: '/admin/reports' },
     { label: 'تکمیل شده', value: data?.closedCompleted, color: 'text-green-500', link: '/admin/reports' },
     { label: 'ناقص', value: data?.closedIncomplete, color: 'text-orange-400', link: '/admin/reports' },
   ];
@@ -82,7 +83,10 @@ export default function AdminDashboard() {
 
         {/* Sessions */}
         <div className="bg-seraj-card rounded-2xl p-4 mb-6">
-          <h3 className="font-bold mb-3">جلسه‌ها</h3>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-bold">جلسه‌ها</h3>
+            <Link to="/admin/sessions" className="text-seraj-orange text-sm">هماهنگی جلسات</Link>
+          </div>
           {data?.sessions?.length === 0 ? (
             <p className="text-seraj-muted text-sm">جلسه‌ای در انتظار نیست</p>
           ) : (

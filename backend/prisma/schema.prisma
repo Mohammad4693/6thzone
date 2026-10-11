@@ -99,6 +99,7 @@ model User {
   mentorProfile  MentorProfile?
   requests       Request[]
   assignments    Assignment[]  @relation("MentorAssignments")
+  availability   MentorAvailability[] @relation("MentorAvailability")
   messages       Message[]
   feedback       Feedback[]
   auditLogs      AuditLog[]    @relation("AuditActor")
@@ -182,12 +183,27 @@ model Assignment {
   mentorId    String
   status      AssignmentStatus @default(ACTIVE)
   startedAt   DateTime @default(now())
-  expiresAt   DateTime          // exactly 72h after startedAt
+  targetAt    DateTime?         // clarify target (default 24h, configurable) — deadline for completing clarification
+  expiresAt   DateTime          // hard expiry (default 72h, configurable)
+  completedAt DateTime?
+  delayHours  Int?              // hours past targetAt when case closed (0 = on time)
   closedAt    DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   @@index([mentorId, status])
+}
+
+model MentorAvailability {
+  id          String @id @default(uuid())
+  mentor      User   @relation("MentorAvailability", fields: [mentorId], references: [id], onDelete: Cascade)
+  mentorId    String
+  dayOfWeek   Int    // 0 = Saturday … 6 = Friday (Persian week)
+  startMinute Int    // minutes from midnight
+  endMinute   Int    // endMinute - startMinute must be >= 15
+  createdAt   DateTime @default(now())
+
+  @@index([mentorId])
 }
 
 model Message {
@@ -200,6 +216,7 @@ model Message {
   content     String?  // text content or transcribed voice
   attachmentId String? // for voice messages
   attachment   Attachment? @relation(fields: [attachmentId], references: [id])
+  user         User?       @relation(fields: [userId], references: [id])
   status      MessageStatus @default(SENT)
   createdAt   DateTime @default(now())
 
@@ -290,6 +307,7 @@ model FinalBrief {
   prerequisites   String?
   incompleteInfo  String?
   criteria        String?
+  nextStep        String?  // قدم بعدی
   openTopics      String?
   mentorName      String?
   summaryAt       DateTime?

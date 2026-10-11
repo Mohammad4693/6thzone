@@ -9,6 +9,9 @@ export default function NewRequestPage() {
   const [text, setText] = useState('');
   const [title, setTitle] = useState('');
   const [voiceBlob, setVoiceBlob] = useState<Blob | null>(null);
+  const [transcribing, setTranscribing] = useState(false);
+  const [transcribed, setTranscribed] = useState(false);
+  const [transcribeMsg, setTranscribeMsg] = useState('');
   const [consentText, setConsentText] = useState('');
   const [consentVersion, setConsentVersion] = useState('1.0');
   const [consentAccepted, setConsentAccepted] = useState(false);
@@ -32,6 +35,29 @@ export default function NewRequestPage() {
 
   const formatToman = (n: number) => n.toLocaleString('fa-IR') + ' تومان';
 
+  // ضبط صدا ← تبدیل به متن ← نمایش و تأیید/ویرایش متن توسط فرد
+  const handleTranscribe = async () => {
+    if (!voiceBlob) return;
+    setTranscribing(true);
+    setTranscribeMsg('');
+    try {
+      const fd = new FormData();
+      fd.append('audio', voiceBlob, 'voice.webm');
+      const res = await client.post('/ai/transcribe', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      setText(res.data.text || '');
+      setTranscribed(true);
+    } catch (err: any) {
+      setTranscribeMsg(
+        (err.response?.data?.message || err.response?.data?.error || 'تبدیل انجام نشد') +
+        ' — می‌توانید متن را مستقیم بنویسید.'
+      );
+    } finally {
+      setTranscribing(false);
+    }
+  };
+
   const handleSubmit = async () => {
     if (!consentAccepted) {
       setError('پذیرش فرم رضایت الزامی است');
@@ -43,6 +69,10 @@ export default function NewRequestPage() {
     }
     if (mode === 'voice' && !voiceBlob) {
       setError('ابتدا باید ضبط کنید');
+      return;
+    }
+    if (!text.trim()) {
+      setError('متن نیاز الزامی است؛ صدا را به متن تبدیل کنید، بازبینی و تأیید کنید یا خودتان بنویسید.');
       return;
     }
 
@@ -110,26 +140,41 @@ export default function NewRequestPage() {
         {mode === 'voice' && (
           <div className="bg-seraj-card rounded-2xl p-6">
             <h2 className="font-bold mb-4">ضبط صدا</h2>
-            <AudioRecorder onRecorded={(blob) => setVoiceBlob(blob)} />
+            <AudioRecorder onRecorded={(blob) => { setVoiceBlob(blob); setTranscribed(false); }} />
             {voiceBlob && (
               <div className="mt-4 text-center">
                 <p className="text-green-400 text-sm mb-2">✓ صدا ضبط شد</p>
-                <button
-                  onClick={() => setVoiceBlob(null)}
-                  className="text-seraj-muted text-sm underline"
-                >
-                  ضبط دوباره
-                </button>
+                <div className="flex items-center justify-center gap-3">
+                  <button
+                    onClick={handleTranscribe}
+                    disabled={transcribing}
+                    className="bg-seraj-orange text-seraj-bg px-4 py-2 rounded-xl text-sm font-bold disabled:opacity-50 touch-target"
+                  >
+                    {transcribing ? 'در حال تبدیل...' : 'تبدیل به متن'}
+                  </button>
+                  <button
+                    onClick={() => { setVoiceBlob(null); setTranscribed(false); setTranscribeMsg(''); }}
+                    className="text-seraj-muted text-sm underline"
+                  >
+                    ضبط دوباره
+                  </button>
+                </div>
               </div>
             )}
+            {transcribeMsg && <p className="text-yellow-400 text-sm mt-3">{transcribeMsg}</p>}
             <div className="mt-4">
-              <label className="text-sm text-seraj-muted mb-1 block">توضیح تکمیلی (اختیاری)</label>
+              <label className="text-sm text-seraj-muted mb-1 block">
+                متن نیاز (بازبینی و ویرایش کنید، سپس تأیید کنید)
+              </label>
               <textarea
                 value={text}
                 onChange={e => setText(e.target.value)}
-                className="w-full bg-seraj-bg border border-white/10 rounded-xl px-4 py-3 text-seraj-text focus:border-seraj-orange focus:outline-none min-h-[80px]"
-                placeholder="می‌توانید توضیح متنی اضافه کنید"
+                className="w-full bg-seraj-bg border border-white/10 rounded-xl px-4 py-3 text-seraj-text focus:border-seraj-orange focus:outline-none min-h-[120px]"
+                placeholder="با «تبدیل به متن» این بخش پر می‌شود؛ می‌توانید مستقیم هم بنویسید"
               />
+              {transcribed && text.trim() && (
+                <p className="text-green-400 text-xs mt-1">✓ متن تبدیل‌شده آماده است؛ پس از بازبینی، درخواست را ارسال کنید.</p>
+              )}
             </div>
             <button onClick={() => setMode('choice')} className="text-seraj-muted text-sm mt-4 underline">
               تغییر روش

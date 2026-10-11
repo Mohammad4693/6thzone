@@ -1,10 +1,67 @@
 import { Router } from 'express';
 import crypto from 'crypto';
+import multer from 'multer';
 import { prisma } from '../prisma';
 import { AuthRequest, requireRole } from '../middleware/auth';
 import { logAudit } from '../utils/audit';
 
 const router = Router();
+
+const voiceStorage = multer.memoryStorage();
+const audioUpload = multer({
+  storage: voiceStorage,
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ok = file.mimetype.startsWith('audio/');
+    cb(ok ? null : new Error('فایل صوتی مجاز نیست'), ok);
+  },
+});
+
+// POST /api/ai/transcribe — voice → text for member's need registration.
+// Uses the configured OpenAI-compatible transcription endpoint. Without a
+// configured key it returns 503 and the member types the text manually —
+// no fake output is ever produced.
+router.post('/transcribe', requireRole('MEMBER'), audioUpload.single('audio'), async (req: AuthRequest, res) => {
+  if (!req.file) return res.status(400).json({ error: 'فایل صوتی الزامی است' });
+
+  const aiKey = process.env.AI_API_KEY;
+  if (!aiKey) {
+    return res.status(503).json({
+      error: 'تبدیل صدا به متن انجام نشد',
+      message: 'سرویس تبدیل صدا به متن تنظیم نشده است. لطفاً متن نیاز را بنویسید.',
+    });
+  }
+
+  try {
+    const base = (process.env.AI_API_URL || 'https://api.openai.com/v1/chat/completions')
+      .replace(/\/chat\/completions$/, '');
+    const transcribeUrl = process.env.AI_TRANSCRIBE_URL || `${base}/audio/transcriptions`;
+    const model = process.env.AI_TRANSCRIBE_MODEL || 'whisper-1';
+
+    const form = new FormData();
+    form.append('file', new Blob([new Uint8Array(req.file.buffer)], { type: req.file.mimetype }), req.file.originalname || 'voice.webm');
+    form.append('model', model);
+
+    const response = await fetch(transcribeUrl, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${aiKey}` },
+      body: form,
+    });
+    if (!response.ok) throw new Error(`transcription service returned ${response.status}`);
+
+    const data = await response.json() as any;
+    const text = (data.text || '').trim();
+    if (!text) return res.status(502).json({ error: 'متنی از صدا استخراج نشد. لطفاً بنویسید.' });
+
+    res.json({ text });
+  } catch (e: any) {
+    res.status(502).json({
+      error: 'تبدیل صدا به متن ناموفق بود',
+      message: 'می‌توانید دوباره تلاش کنید یا متن را بنویسید.',
+      detail: e.message,
+    });
+  }
+});
 
 // POST /api/ai/:requestId/generate - generate AI draft (mentor only)
 router.post('/:requestId/generate', requireRole('MENTOR'), async (req: AuthRequest, res) => {
