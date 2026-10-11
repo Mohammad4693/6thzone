@@ -99,7 +99,8 @@ router.post('/send-code', async (req, res) => {
       phone: normalizedPhone,
       code,
       expiresAt: new Date(Date.now() + CODE_EXPIRY_MINUTES * 60 * 1000),
-      userId: user.id,
+      // `phone` is the FK to User, so the scalar alone sets the relation.
+      // Passing the relation too makes Prisma reject the create (invalid input).
     },
   });
 

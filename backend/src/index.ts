@@ -4,6 +4,7 @@ import cors from 'cors';
 import path from 'path';
 import { errorHandler, notFound } from './middleware/errorHandler';
 import { authMiddleware } from './middleware/auth';
+import { prisma } from './prisma';
 import authRoutes from './routes/auth';
 import requestRoutes from './routes/requests';
 import messageRoutes from './routes/messages';
@@ -77,3 +78,43 @@ app.use(errorHandler);
 app.listen(PORT, () => {
   console.log(`[Seraj] Server running on port ${PORT}`);
 });
+
+// Expiry sweep: when the configurable hard expiry passes without the member's
+// response, close the case read-only (CLOSED_EXPIRED), record the delay vs the
+// 24h clarify target, and release the mentor's slot. Runs every 5 minutes.
+const EXPIRY_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
+async function sweepExpiredCases() {
+  try {
+    const expired = await prisma.assignment.findMany({
+      where: { status: 'ACTIVE', expiresAt: { lt: new Date() } },
+    });
+    for (const a of expired) {
+      const now = new Date();
+      const delayHours = a.targetAt
+        ? Math.max(0, Math.ceil((now.getTime() - a.targetAt.getTime()) / 3600000))
+        : null;
+      await prisma.$transaction([
+        prisma.assignment.update({
+          where: { id: a.id },
+          data: { status: 'EXPIRED', closedAt: now, completedAt: null, delayHours },
+        }),
+        prisma.request.update({
+          where: { id: a.requestId },
+          data: { status: 'CLOSED_EXPIRED', closedAt: now },
+        }),
+        prisma.mentorProfile.update({
+          where: { userId: a.mentorId },
+          data: { activeCount: { decrement: 1 } },
+        }),
+      ]);
+      console.log(`[Seraj] Case ${a.requestId} closed (72h expiry), delayHours=${delayHours}`);
+    }
+  } catch (e: any) {
+    console.error('[Seraj] Expiry sweep failed:', e.message);
+  }
+}
+
+setInterval(sweepExpiredCases, EXPIRY_SWEEP_INTERVAL_MS);
+// Run once shortly after boot
+setTimeout(sweepExpiredCases, 10 * 1000);

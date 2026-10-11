@@ -56,7 +56,7 @@ export default function AdminDashboard() {
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-seraj-muted">تعداد پاسخ‌دهندگان</span>
-              <span>{data?.pilotMetrics?.totalFeedback || ۰}</span>
+              <span>{data?.pilotMetrics?.totalFeedback || 0}</span>
             </div>
           </div>
         </div>
