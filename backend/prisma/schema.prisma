@@ -15,12 +15,12 @@ enum Role {
 
 enum RequestStatus {
   DRAFT
-  PENDING_REVIEW    // in admin queue
-  APPROVED          // admin accepted, awaiting contribution
-  ASSIGNED          // mentor assigned, active
-  CLOSED_EXPIRED    // 72h passed, read-only
-  CLOSED_COMPLETED  // final brief approved
-  CLOSED_INCOMPLETE // closed with incomplete info
+  PENDING_REVIEW    // submitted / new AI analysis ready — admin must act
+  APPROVED          // admin sent approved questions — awaiting member answers
+  ASSIGNED          // legacy mentor flow (feature flag off)
+  CLOSED_EXPIRED    // legacy 72h auto-close (feature flag off)
+  CLOSED_COMPLETED  // final brief approved + admin closed
+  CLOSED_INCOMPLETE // admin closed manually
   REJECTED          // admin rejected
 }
 
@@ -87,6 +87,7 @@ enum ServiceVerification {
 model User {
   id             String   @id @default(uuid())
   phone          String   @unique
+  email          String?  @unique // admin (reviewer) login
   firstName      String
   lastName       String
   role           Role     @default(MEMBER)
@@ -104,6 +105,8 @@ model User {
   feedback       Feedback[]
   auditLogs      AuditLog[]    @relation("AuditActor")
   otpCodes       OtpCode[]
+  loginLinks     LoginLink[]
+  consents       ConsentRecord[]
 
   @@index([role])
 }
@@ -119,6 +122,19 @@ model OtpCode {
   user      User?    @relation(fields: [phone], references: [phone])
 
   @@index([phone, used])
+}
+
+model LoginLink {
+  id        String   @id @default(uuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  tokenHash String   @unique // sha256 of the raw token — raw token is never stored
+  expiresAt DateTime // 30 days
+  usedAt    DateTime?
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
 }
 
 model Profile {
@@ -150,7 +166,7 @@ model Request {
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId          String
   title           String?
-  description     String   // initial text or transcribed voice
+  description     String   // confirmed transcript / typed text — the only text in the case
   status          RequestStatus @default(PENDING_REVIEW)
   domain          String   @default("legal") // حقوقی - expandable
   contributionAmount Int?  // amount accepted at time of submission
@@ -165,6 +181,8 @@ model Request {
   attachments     Attachment[]
   aiDrafts        AIDraft[]
   claritySections ClaritySection[]
+  aiRounds        AiRound[]
+  proposedQuestions ProposedQuestion[]
   sessions        Session[]
   finalBrief      FinalBrief?
   contribution    Contribution?
@@ -211,9 +229,9 @@ model Message {
   request     Request   @relation(fields: [requestId], references: [id], onDelete: Cascade)
   requestId   String
   sender      MessageSender
-  userId      String?  // who sent it (member or mentor user id)
+  userId      String?  // who sent it (member or admin user id)
   type        MessageType @default(TEXT)
-  content     String?  // text content or transcribed voice
+  content     String?  // text content or confirmed transcript of voice
   attachmentId String? // for voice messages
   attachment   Attachment? @relation(fields: [attachmentId], references: [id])
   user         User?       @relation(fields: [userId], references: [id])
@@ -231,7 +249,8 @@ model Attachment {
   originalName String
   mimeType    String
   size        Int
-  path        String   // stored path on server
+  path        String?  // legacy disk path (payments flag) — unused in v4
+  data        Bytes?   // audio stored in the database (survives restarts / free-tier disks)
   uploadedBy  String
   createdAt   DateTime @default(now())
 
@@ -279,6 +298,41 @@ model ProgressSection {
   @@unique([requestId, section])
 }
 
+model AiRound {
+  id          String   @id @default(uuid())
+  request     Request   @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  requestId   String
+  round       Int      // 1-based per kind
+  kind        String   @default("ANALYSIS") // ANALYSIS | FINAL_SHEET
+  inputText   String   // thread text sent to the model
+  status      String   @default("PENDING") // PENDING (در حال تحلیل) | DONE | FAILED
+  output      Json?    // validated structured output — never exposed to member
+  error       String?
+  tokensIn    Int?
+  tokensOut   Int?
+  costUsd     Float?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([requestId, kind])
+  @@index([status])
+}
+
+model ProposedQuestion {
+  id          String   @id @default(uuid())
+  request     Request   @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  requestId   String
+  roundId     String?  // AiRound that proposed it (null = manual)
+  text        String
+  source      String   @default("AI") // AI | MANUAL
+  status      String   @default("PENDING") // PENDING | APPROVED | EDITED | DELETED | SENT
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([requestId, status])
+}
+
 model Session {
   id          String   @id @default(uuid())
   request     Request   @relation(fields: [requestId], references: [id], onDelete: Cascade)
@@ -321,11 +375,15 @@ model FinalBrief {
 
 model ConsentRecord {
   id              String   @id @default(uuid())
-  request         Request   @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  requestId       String
+  request         Request?  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  requestId       String?
+  user            User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          String?   // first-login consent (before any request exists)
   version         String
   text            String   // full consent text at time of acceptance
   acceptedAt      DateTime @default(now())
+
+  @@index([userId])
 }
 
 model Contribution {
@@ -355,9 +413,9 @@ model Feedback {
 
 model AuditLog {
   id          String   @id @default(uuid())
-  actor        User?    @relation("AuditActor", fields: [actorId], references: [id])
-  actorId      String?
-  action       String   // e.g. "ROLE_CHANGE", "ASSIGN_MENTOR", "APPROVE_DRAFT"
+  actor       User?    @relation("AuditActor", fields: [actorId], references: [id])
+  actorId     String?
+  action       String   // e.g. "ROLE_CHANGE", "CREATE_MEMBER", "APPROVE_QUESTION"
   entityType   String
   entityId     String?
   details      Json?
