@@ -4,6 +4,8 @@ interface AudioRecorderProps {
   onRecorded: (blob: Blob, duration: number) => void;
 }
 
+const MAX_DURATION_SECONDS = 180; // 3 minutes
+
 export default function AudioRecorder({ onRecorded }: AudioRecorderProps) {
   const [recording, setRecording] = useState(false);
   const [duration, setDuration] = useState(0);
@@ -17,7 +19,7 @@ export default function AudioRecorder({ onRecorded }: AudioRecorderProps) {
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
-      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+      if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
     };
   }, []);
 
@@ -39,16 +41,27 @@ export default function AudioRecorder({ onRecorded }: AudioRecorderProps) {
       mr.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
         onRecorded(blob, duration);
-        stream.getTracks().forEach(t => t.stop());
+        stream.getTracks().forEach((t) => t.stop());
       };
 
       mr.start();
       setRecording(true);
       setDuration(0);
       timerRef.current = setInterval(() => {
-        setDuration(d => d + 1);
+        setDuration((d) => {
+          if (d + 1 >= MAX_DURATION_SECONDS) {
+            // hard 3-minute cap
+            if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+              mediaRecorderRef.current.stop();
+              setRecording(false);
+            }
+            if (timerRef.current) clearInterval(timerRef.current);
+            return MAX_DURATION_SECONDS;
+          }
+          return d + 1;
+        });
       }, 1000);
-    } catch (e: any) {
+    } catch {
       setError('دسترسی به میکروفون ممکن نشد. لطفاً اجازه میکروفون را بدهید.');
     }
   };
@@ -71,7 +84,7 @@ export default function AudioRecorder({ onRecorded }: AudioRecorderProps) {
     <div className="flex flex-col items-center gap-4">
       <button
         onClick={recording ? stopRecording : startRecording}
-        className={`w-24 h-24 rounded-full flex items-center justify-center transition-all touch-target ${
+        className={`w-28 h-28 rounded-full flex items-center justify-center transition-all touch-target ${
           recording
             ? 'bg-red-500/20 border-2 border-red-500'
             : 'bg-seraj-card border-2 border-seraj-orange hover:bg-seraj-orange/10'
@@ -79,9 +92,9 @@ export default function AudioRecorder({ onRecorded }: AudioRecorderProps) {
         aria-label={recording ? 'توقف ضبط' : 'شروع ضبط'}
       >
         {recording ? (
-          <div className="w-8 h-8 bg-red-500 rounded" />
+          <div className="w-9 h-9 bg-red-500 rounded" />
         ) : (
-          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#F69A46" strokeWidth="2">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#F69A46" strokeWidth="2">
             <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
             <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
             <line x1="12" y1="19" x2="12" y2="22" />
@@ -91,7 +104,7 @@ export default function AudioRecorder({ onRecorded }: AudioRecorderProps) {
 
       {recording && (
         <div className="text-seraj-muted text-sm">
-          در حال ضبط... {formatTime(duration)}
+          در حال ضبط... {formatTime(duration)} <span className="text-xs">(حداکثر ۳ دقیقه)</span>
         </div>
       )}
 
@@ -101,9 +114,7 @@ export default function AudioRecorder({ onRecorded }: AudioRecorderProps) {
         </div>
       )}
 
-      {error && (
-        <div className="text-red-400 text-sm text-center px-4">{error}</div>
-      )}
+      {error && <div className="text-red-400 text-sm text-center px-4">{error}</div>}
     </div>
   );
 }

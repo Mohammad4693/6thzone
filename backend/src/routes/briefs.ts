@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../prisma';
 import { AuthRequest, requireRole } from '../middleware/auth';
 import { logAudit } from '../utils/audit';
+import { FLAGS } from '../config/flags';
 
 const router = Router();
 
@@ -18,8 +19,15 @@ router.get('/:requestId', async (req: AuthRequest, res) => {
   if (req.userRole === 'MEMBER' && request.userId !== req.userId) {
     return res.status(403).json({ error: 'دسترسی مجاز نیست' });
   }
-  if (req.userRole === 'MENTOR' && (!request.assignment || request.assignment.mentorId !== req.userId)) {
-    return res.status(403).json({ error: 'دسترسی مجاز نیست' });
+  if (req.userRole === 'MENTOR') {
+    if (!FLAGS.mentorAssignment || !request.assignment || request.assignment.mentorId !== req.userId) {
+      return res.status(403).json({ error: 'دسترسی مجاز نیست' });
+    }
+  }
+
+  // RULE: members only see the brief after admin approval
+  if (req.userRole === 'MEMBER' && (!request.finalBrief || !request.finalBrief.mentorApproved)) {
+    return res.json(null);
   }
 
   res.json(request.finalBrief);
@@ -102,10 +110,17 @@ router.post('/:requestId/member-response', requireRole('MEMBER'), async (req: Au
   if (!request) return res.status(404).json({ error: 'پرونده یافت نشد' });
   if (request.userId !== req.userId) return res.status(403).json({ error: 'دسترسی مجاز نیست' });
 
-  // Check assignment is still active
-  const assignment = await prisma.assignment.findUnique({ where: { requestId } });
-  if (!assignment || new Date() > assignment.expiresAt) {
-    return res.status(400).json({ error: 'زمان فعال پرونده به پایان رسیده' });
+  // Legacy: check the 72h assignment is still active (flag off in v4 —
+  // a member can approve any case that isn't closed)
+  if (FLAGS.autoClose72h) {
+    const assignment = await prisma.assignment.findUnique({ where: { requestId } });
+    if (!assignment || new Date() > assignment.expiresAt) {
+      return res.status(400).json({ error: 'زمان فعال پرونده به پایان رسیده' });
+    }
+  }
+  const v4Request = await prisma.request.findUnique({ where: { id: requestId } });
+  if (!v4Request || v4Request.status.startsWith('CLOSED') || v4Request.status === 'REJECTED') {
+    return res.status(400).json({ error: 'پرونده بسته شده است' });
   }
 
   const brief = await prisma.finalBrief.update({

@@ -1,7 +1,7 @@
 import { prisma } from '../prisma';
 
 export async function logAudit(
-  actorId: string | null,
+  actorId: string | null | undefined,
   action: string,
   entityType: string,
   entityId?: string,

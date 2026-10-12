@@ -87,9 +87,20 @@ async function runRound(requestId: string, kind: 'ANALYSIS' | 'FINAL_SHEET'): Pr
   } catch (e: any) {
     await prisma.aiRound.update({
       where: { id: round.id },
-      data: { status: 'FAILED', error: e.message || 'خطای نامشخص' },
+      data: { status: 'FAILED', error: friendlyAiError(e.message) },
     });
   }
+}
+
+// Clear Persian error for the admin panel — never includes the key or raw
+// provider internals.
+function friendlyAiError(message: string): string {
+  if (message === 'ai_chat_failed_429')
+    return 'سرویس هوش مصنوعی در دسترس نیست (سهمیه کلید تمام شده یا محدودیت نرخ). اعتبار کلید OpenAI را بررسی کنید.';
+  if (message === 'ai_chat_failed_401') return 'کلید هوش مصنوعی نامعتبر است.';
+  if (message === 'ai_chat_failed_500') return 'خطای داخلی سرویس هوش مصنوعی — دوباره تلاش کنید.';
+  if (message === 'ai_invalid_json') return 'خروجی نامعتبر از مدل — دوباره تلاش کنید.';
+  return message || 'خطای نامشخص';
 }
 
 export { CLARITY_LABELS_FA, CLARITY_STATUSES_FA };

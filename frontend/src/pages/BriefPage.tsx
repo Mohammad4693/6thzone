@@ -1,120 +1,128 @@
-import { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
-import Layout from '../components/Layout';
+import { useEffect, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 import client from '../api/client';
 
-// برگه نهایی: نیاز روشن، اولویت‌ها، اطلاعات ناقص، معیارهای انتخاب منابع، قدم بعدی
+interface Brief {
+  title: string;
+  initialDesc: string;
+  clarifiedProblem: string;
+  desiredOutcome: string;
+  constraints?: string | null;
+  incompleteInfo?: string | null;
+  nextStep?: string | null;
+  mentorApproved: boolean;
+  memberApproved?: boolean | null;
+}
+
+// Final brief — member view + approval + print/PDF. Members only ever reach
+// this page with an admin-approved brief (the API returns null otherwise).
 export default function BriefPage() {
   const { requestId } = useParams();
-  const [brief, setBrief] = useState<any>(null);
-  const [feedback, setFeedback] = useState('');
+  const { user } = useAuth();
+  const [brief, setBrief] = useState<Brief | null>(null);
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [msg, setMsg] = useState('');
 
-  const load = () => {
-    client.get(`/briefs/${requestId}`).then(res => {
-      setBrief(res.data);
-      setLoading(false);
-    }).catch(err => {
-      setError(err.response?.data?.error || 'برگه یافت نشد');
-      setLoading(false);
-    });
-  };
+  useEffect(() => {
+    client
+      .get(`/briefs/${requestId}`)
+      .then((r) => setBrief(r.data))
+      .catch(() => setError('برگه یافت نشد'))
+      .finally(() => setLoading(false));
+  }, [requestId]);
 
-  useEffect(() => { load(); }, [requestId]);
-
-  const respond = async (approved: boolean) => {
-    setMsg('');
+  const approve = async () => {
+    setBusy(true);
+    setError('');
     try {
-      await client.post(`/briefs/${requestId}/member-response`, { approved, feedback: approved ? undefined : feedback });
-      setMsg(approved ? '✓ تأیید شما ثبت شد' : 'بازخورد شما برای منتور ارسال شد');
-      load();
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'خطا');
+      const res = await client.post(`/briefs/${requestId}/member-response`, { approved: true });
+      setBrief(res.data);
+    } catch (e: any) {
+      setError(e.response?.data?.error || 'تأیید ناموفق بود');
+    } finally {
+      setBusy(false);
     }
   };
 
   const download = async () => {
     try {
       const res = await client.get(`/briefs/${requestId}/download`, { responseType: 'blob' });
-      const url = URL.createObjectURL(res.data as Blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'seraj-brief.html';
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'دانلود ممکن نشد');
+      const url = URL.createObjectURL(res.data);
+      window.open(url, '_blank');
+    } catch {
+      setError('دانلود ناموفق بود');
     }
   };
 
-  if (loading) return <Layout><div className="p-4 text-seraj-muted">در حال بارگذاری...</div></Layout>;
-  if (!brief) return <Layout><div className="p-4 text-seraj-muted">{error || 'برگه‌ای برای این پرونده ثبت نشده است'}</div></Layout>;
+  if (loading) {
+    return <div className="min-h-screen bg-seraj-bg flex items-center justify-center text-seraj-muted">در حال بارگذاری...</div>;
+  }
+  if (!brief) {
+    return (
+      <div className="min-h-screen bg-seraj-bg flex flex-col items-center justify-center px-6 text-center">
+        <p className="text-seraj-muted mb-4">برگه هنوز تأیید نشده یا در دسترس شما نیست.</p>
+        <Link to="/dashboard" className="text-seraj-orange underline touch-target">بازگشت</Link>
+      </div>
+    );
+  }
 
-  const bothApproved = brief.mentorApproved && brief.memberApproved === true;
-
-  const sections = [
-    { key: 'clarifiedProblem', label: 'نیاز روشن' },
-    { key: 'priority', label: 'اولویت‌ها' },
-    { key: 'incompleteInfo', label: 'اطلاعات ناقص' },
-    { key: 'criteria', label: 'معیارهای انتخاب منابع' },
-    { key: 'nextStep', label: 'قدم بعدی' },
-  ];
+  const isMember = user?.role === 'MEMBER';
+  const canDownload = brief.mentorApproved && brief.memberApproved === true;
+  const section = (label: string, value?: string | null) => (
+    <div className="bg-seraj-card border border-gray-800 rounded-xl p-4">
+      <p className="text-seraj-orange text-xs font-bold mb-2">{label}</p>
+      <p className="text-sm leading-relaxed whitespace-pre-wrap">{value || '—'}</p>
+    </div>
+  );
 
   return (
-    <Layout>
-      <div className="max-w-2xl mx-auto px-4 py-6">
-        <h1 className="text-2xl font-bold mb-6">برگه نهایی</h1>
-        {error && <p className="text-red-400 text-sm mb-4">{error}</p>}
-        {msg && <p className="text-green-400 text-sm mb-4">{msg}</p>}
+    <div className="min-h-screen bg-seraj-bg">
+      <header className="flex items-center justify-between px-4 py-3 border-b border-gray-800 sticky top-0 bg-seraj-bg z-10">
+        <Link to={isMember ? '/dashboard' : '/admin'} className="text-seraj-muted text-sm touch-target">بازگشت</Link>
+        <h1 className="font-bold text-sm">برگه روشن نیاز</h1>
+        <span className="w-12" />
+      </header>
 
-        <div className="bg-seraj-card rounded-2xl p-4 mb-4">
-          <p className="font-bold mb-1">{brief.title || 'بدون عنوان'}</p>
-          {brief.mentorName && <p className="text-xs text-seraj-muted">منتور: {brief.mentorName}</p>}
+      <main className="max-w-lg mx-auto px-4 py-6 pb-24 flex flex-col gap-3">
+        <div className="bg-seraj-card border border-gray-800 rounded-xl p-4">
+          <p className="text-seraj-muted text-xs mb-1">عنوان</p>
+          <p className="font-bold leading-relaxed">{brief.title || 'بدون عنوان'}</p>
+          <p className="text-seraj-muted text-xs mt-3 mb-1">شرح اولیه</p>
+          <p className="text-sm leading-relaxed whitespace-pre-wrap">{brief.initialDesc || '—'}</p>
         </div>
+        {section('۱. مسئله', brief.clarifiedProblem)}
+        {section('۲. نتیجه مطلوب', brief.desiredOutcome)}
+        {section('۳. قیود و هزینه', brief.constraints)}
+        {section('۴. منابع و اطلاعات', brief.incompleteInfo)}
+        {section('۵. قدم بعدی', brief.nextStep)}
 
-        <div className="space-y-3 mb-4">
-          {sections.map(s => (
-            <div key={s.key} className="bg-seraj-card rounded-2xl p-4">
-              <p className="text-seraj-orange text-xs font-bold mb-1">{s.label}</p>
-              <p className="text-sm whitespace-pre-wrap">{brief[s.key] || '—'}</p>
-            </div>
-          ))}
-        </div>
+        {error && <p className="text-red-400 text-sm">{error}</p>}
 
-        {!brief.mentorApproved && (
-          <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-2xl p-4 text-sm text-yellow-400">
-            برگه هنوز توسط منتور تأیید نشده است.
-          </div>
-        )}
-
-        {brief.mentorApproved && brief.memberApproved !== true && (
-          <div className="bg-seraj-card rounded-2xl p-4 mb-4">
-            <h3 className="font-bold text-sm mb-3">تأیید برگه توسط شما</h3>
-            <textarea
-              value={feedback}
-              onChange={e => setFeedback(e.target.value)}
-              placeholder="اگر تغییری لازم است، بنویسید (اختیاری)"
-              className="w-full bg-seraj-bg border border-white/10 rounded-xl px-4 py-3 text-seraj-text focus:border-seraj-orange focus:outline-none min-h-[80px] mb-3"
-            />
-            <div className="flex gap-2">
-              <button onClick={() => respond(true)} className="bg-green-500/20 text-green-400 px-4 py-2 rounded-xl text-sm touch-target">
-                تأیید می‌کنم
-              </button>
-              <button onClick={() => respond(false)} disabled={!feedback.trim()} className="bg-red-500/20 text-red-400 px-4 py-2 rounded-xl text-sm disabled:opacity-50">
-                نیاز به تغییر دارد
-              </button>
-            </div>
-          </div>
-        )}
-
-        {bothApproved && (
-          <button onClick={download} className="w-full bg-seraj-orange text-seraj-bg rounded-xl py-3 font-bold touch-target">
-            دانلود برگه نهایی
+        {isMember && brief.mentorApproved && brief.memberApproved !== true && (
+          <button
+            onClick={approve}
+            disabled={busy}
+            className="w-full py-4 bg-seraj-orange text-seraj-bg rounded-xl font-bold touch-target disabled:opacity-50"
+          >
+            {busy ? '...' : 'برگه را تأیید می‌کنم'}
           </button>
         )}
-      </div>
-    </Layout>
+
+        {canDownload && (
+          <button
+            onClick={download}
+            className="w-full py-4 bg-seraj-card border border-seraj-orange rounded-xl font-bold text-seraj-orange touch-target"
+          >
+            دریافت نسخه PDF / چاپ
+          </button>
+        )}
+
+        <p className="text-seraj-muted text-xs text-center leading-relaxed">
+          نسخه PDF به‌صورت فایل آماده چاپ (فارسی و راست‌به‌چپ) باز می‌شود؛ با گزینه Save as PDF مرورگر ذخیره کنید.
+        </p>
+      </main>
+    </div>
   );
 }

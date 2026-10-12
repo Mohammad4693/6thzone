@@ -34,6 +34,9 @@ services:
       - PORT=4000
       - BASE44_PREVIEW_MODE
       - __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS
+      # Base for member login links the admin copies — set to the public
+      # frontend URL; never a resolved host baked into files.
+      - PUBLIC_APP_URL=https://3000-${BASE44_PUBLIC_HOST_SUFFIX}
     ports:
       - "4000:4000"
     healthcheck:

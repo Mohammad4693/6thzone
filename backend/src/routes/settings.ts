@@ -51,7 +51,7 @@ router.put('/', requireRole('ADMIN'), async (req: AuthRequest, res) => {
     });
   }
 
-  logAudit(req.userId, 'UPDATE_SETTINGS', 'Setting', null, { updatedKeys: updates.map(u => u.key) });
+  logAudit(req.userId, 'UPDATE_SETTINGS', 'Setting', undefined, { updatedKeys: updates.map(u => u.key) });
   res.json({ ok: true });
 });
 

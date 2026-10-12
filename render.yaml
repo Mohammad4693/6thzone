@@ -1,0 +1,77 @@
+# Render Blueprint for Seraj (نسخه تست v4)
+# Deploy: Push this repo to GitHub → Render Dashboard → New → Blueprint →
+# select the repo. Fill the sync:false secrets when prompted.
+#
+# Free-tier notes (see README for the paid upgrade):
+# - The web service sleeps after 15 idle minutes; the frontend auto-retries
+#   with a "سامانه در حال آماده‌سازی است" message.
+# - The free Postgres expires after ~30 days — run the export script before
+#   it expires (README: خروجی گرفتن از داده‌ها).
+services:
+  - type: web
+    name: seraj-api
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install && npm run build && npx prisma generate
+    startCommand: npx prisma migrate deploy && node dist/index.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: seraj-db
+          property: connectionString
+      - key: OPENAI_API_KEY
+        sync: false      # your OpenAI key — dashboard only, never in the repo
+      - key: OPENAI_BASE_URL
+        sync: false      # optional, defaults to https://api.openai.com
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_EMAIL
+        sync: false      # reviewer login (email + password)
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: PUBLIC_APP_URL
+        sync: false      # https://<frontend-url> — base for member login links
+      - key: AI_CHAT_MODEL
+        sync: false      # optional, defaults to gpt-4o-mini
+      - key: AI_TRANSCRIBE_MODEL
+        sync: false      # optional, defaults to whisper-1
+      # Feature flags (v4 MVP defaults = all OFF). Set to "1" to re-enable.
+      - key: FLAG_OTP
+        value: "0"
+      - key: FLAG_PAYMENTS
+        value: "0"
+      - key: FLAG_SESSIONS
+        value: "0"
+      - key: FLAG_MENTOR_ASSIGNMENT
+        value: "0"
+      - key: FLAG_AUTO_CLOSE_72H
+        value: "0"
+      - key: FLAG_AUTO_DELETE_PROFILE
+        value: "0"
+
+  - type: web
+    name: seraj-web
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    pullRequestPreviewsEnabled: false
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: VITE_API_BASE
+        sync: false     # https://seraj-api-<hash>.onrender.com — the backend URL (browser)
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+databases:
+  - name: seraj-db
+    plan: free
+    databaseName: seraj
+    user: seraj

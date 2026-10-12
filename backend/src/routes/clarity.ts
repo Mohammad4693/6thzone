@@ -10,9 +10,10 @@ router.get('/:requestId', async (req: AuthRequest, res) => {
   const { requestId } = req.params;
   const request = await prisma.request.findUnique({
     where: { id: requestId },
-    include: { assignment: true, claritySections: true, progressSections: true },
-  });
+    include: { assignment: true, claritySections: true },
+  }) as any;
   if (!request) return res.status(404).json({ error: 'پرونده یافت نشد' });
+  const progressSections = request.progressSections || [];
 
   // Access control
   if (req.userRole === 'MEMBER' && request.userId !== req.userId) {
@@ -24,19 +25,19 @@ router.get('/:requestId', async (req: AuthRequest, res) => {
 
   // Members only see progress, not full clarity details
   if (req.userRole === 'MEMBER') {
-    const confirmed = request.progressSections.filter(p => p.confirmed).length;
+    const confirmed = progressSections.filter((p: any) => p.confirmed).length;
     const progress = Math.round((confirmed / 5) * 100);
     return res.json({
       progress,
-      progressSections: request.progressSections.map(p => ({ section: p.section, label: p.label, confirmed: p.confirmed })),
-      claritySections: request.claritySections.map(c => ({ axisNumber: c.axisNumber, axisLabel: c.axisLabel, enabled: c.enabled, confirmed: c.confirmed })),
+      progressSections: progressSections.map((p: any) => ({ section: p.section, label: p.label, confirmed: p.confirmed })),
+      claritySections: request.claritySections.map((c: any) => ({ axisNumber: c.axisNumber, axisLabel: c.axisLabel, enabled: c.enabled, confirmed: c.confirmed })),
     });
   }
 
   res.json({
     claritySections: request.claritySections,
-    progressSections: request.progressSections,
-    progress: Math.round((request.progressSections.filter(p => p.confirmed).length / 5) * 100),
+    progressSections,
+    progress: Math.round((progressSections.filter((p: any) => p.confirmed).length / 5) * 100),
   });
 });
 

@@ -1,14 +1,88 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import { prisma } from '../prisma';
 import { generateToken } from '../middleware/auth';
+import { FLAGS } from '../config/flags';
 import { generateOtp, normalizeIranPhone, isValidIranPhone, CODE_EXPIRY_MINUTES, MAX_ATTEMPTS } from '../utils/otp';
 import { logAudit } from '../utils/audit';
 
 const router = Router();
 
+// ─── v4: admin (reviewer) login with email + password ───
+router.post('/admin-login', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) return res.status(400).json({ error: 'ایمیل و رمز الزامی است' });
+
+  const user = await prisma.user.findUnique({
+    where: { email: String(email).trim().toLowerCase() },
+    include: { profile: true, mentorProfile: true },
+  });
+  if (!user || user.role !== 'ADMIN') {
+    return res.status(401).json({ error: 'ایمیل یا رمز نادرست است' });
+  }
+
+  const ok = await bcrypt.compare(password, user.passwordHash);
+  if (!ok) return res.status(401).json({ error: 'ایمیل یا رمز نادرست است' });
+
+  logAudit(user.id, 'ADMIN_LOGIN', 'User', user.id);
+  const token = generateToken(user.id, user.role, user.phone);
+  res.json({
+    token,
+    user: {
+      id: user.id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      role: user.role,
+      phoneVerified: user.phoneVerified,
+      profile: user.profile ?? null,
+      mentorProfile: user.mentorProfile ?? null,
+    },
+  });
+});
+
+// ─── v4: member login via personal link (secure random token, 30 days, revocable) ───
+router.post('/link-login', async (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ error: 'لینک ورود نامعتبر است' });
+
+  const tokenHash = crypto.createHash('sha256').update(String(token)).digest('hex');
+  const link = await prisma.loginLink.findUnique({
+    where: { tokenHash },
+    include: { user: { include: { profile: true, mentorProfile: true } } },
+  });
+
+  if (!link || link.revokedAt || link.usedAt || link.expiresAt <= new Date()) {
+    return res.status(401).json({ error: 'این لینک ورود معتبر نیست. از ادمین سراج لینک جدید بگیرید.' });
+  }
+
+  await prisma.loginLink.update({
+    where: { id: link.id },
+    data: { usedAt: new Date() },
+  });
+
+  logAudit(link.user.id, 'LINK_LOGIN', 'User', link.user.id);
+  const jwt = generateToken(link.user.id, link.user.role, link.user.phone);
+  res.json({
+    token: jwt,
+    user: {
+      id: link.user.id,
+      phone: link.user.phone,
+      firstName: link.user.firstName,
+      lastName: link.user.lastName,
+      role: link.user.role,
+      phoneVerified: link.user.phoneVerified,
+      profile: link.user.profile ?? null,
+      mentorProfile: link.user.mentorProfile ?? null,
+    },
+  });
+});
+
+// ─── Legacy OTP flow — only mounted when FLAG_OTP is on ───
 // POST /api/auth/register
 router.post('/register', async (req, res) => {
+  if (!FLAGS.otp) return res.status(404).json({ error: 'این مسیر در نسخه تست فعال نیست' });
   const { firstName, lastName, phone } = req.body;
   if (!firstName || !lastName || !phone) {
     return res.status(400).json({ error: 'نام، نام خانوادگی و شماره موبایل الزامی است' });
@@ -23,7 +97,7 @@ router.post('/register', async (req, res) => {
     return res.status(409).json({ error: 'این شماره قبلاً ثبت شده است. وارد شوید.' });
   }
 
-  // Create user with a random password (login is OTP-based)
+  // Create user with a random password (legacy login was OTP-based)
   const passwordHash = await bcrypt.hash(crypto.randomUUID(), 10);
   const user = await prisma.user.create({
     data: {
@@ -49,7 +123,6 @@ router.post('/register', async (req, res) => {
 
   // NOTE: SMS sending requires an external SMS gateway (e.g. Kavenegar, Farapayamak).
   // This connection is NOT configured. In development, the code is returned for testing.
-  // In production, connect an SMS provider and send the code via their API.
   const smsConfigured = !!process.env.SMS_API_KEY;
 
   logAudit(user.id, 'REGISTER', 'User', user.id);
@@ -58,8 +131,6 @@ router.post('/register', async (req, res) => {
     message: 'کد تأیید ارسال شد',
     userId: user.id,
     phone: normalizedPhone,
-    // In dev mode without SMS, return the code so testing is possible.
-    // This is NOT fake verification — the code is real and must be entered.
     devCode: smsConfigured ? undefined : code,
     smsConfigured,
     note: smsConfigured
@@ -70,6 +141,7 @@ router.post('/register', async (req, res) => {
 
 // POST /api/auth/send-code (resend or send to existing user)
 router.post('/send-code', async (req, res) => {
+  if (!FLAGS.otp) return res.status(404).json({ error: 'این مسیر در نسخه تست فعال نیست' });
   const { phone } = req.body;
   if (!phone) return res.status(400).json({ error: 'شماره موبایل الزامی است' });
   const normalizedPhone = normalizeIranPhone(phone);
@@ -100,7 +172,6 @@ router.post('/send-code', async (req, res) => {
       code,
       expiresAt: new Date(Date.now() + CODE_EXPIRY_MINUTES * 60 * 1000),
       // `phone` is the FK to User, so the scalar alone sets the relation.
-      // Passing the relation too makes Prisma reject the create (invalid input).
     },
   });
 
@@ -115,6 +186,7 @@ router.post('/send-code', async (req, res) => {
 
 // POST /api/auth/verify
 router.post('/verify', async (req, res) => {
+  if (!FLAGS.otp) return res.status(404).json({ error: 'این مسیر در نسخه تست فعال نیست' });
   const { phone, code } = req.body;
   if (!phone || !code) return res.status(400).json({ error: 'شماره و کد الزامی است' });
   const normalizedPhone = normalizeIranPhone(phone);
@@ -194,6 +266,7 @@ router.get('/me', async (req, res) => {
     res.json({
       id: user.id,
       phone: user.phone,
+      email: user.email,
       firstName: user.firstName,
       lastName: user.lastName,
       role: user.role,

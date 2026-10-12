@@ -19,7 +19,7 @@ export default function AdminSessionsPage() {
     setSessions(list);
     const mentorIds = [...new Set(list.map((s: any) => s.request.assignment?.mentorId).filter(Boolean))];
     const av: Record<string, any[]> = {};
-    await Promise.all(mentorIds.map(async (mid: string) => {
+    await Promise.all(mentorIds.map(async (mid: any) => {
       try {
         const r = await client.get(`/admin/sessions/availability/${mid}`);
         av[mid] = r.data;

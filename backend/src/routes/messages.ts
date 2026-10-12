@@ -1,56 +1,68 @@
 import { Router } from 'express';
 import multer from 'multer';
-import path from 'path';
 import { prisma } from '../prisma';
 import { AuthRequest, requireRole } from '../middleware/auth';
-import { logAudit } from '../utils/audit';
+import { FLAGS } from '../config/flags';
+import { startAnalysis } from '../services/analysis';
 
 const router = Router();
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, path.join(__dirname, '..', '..', 'uploads')),
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname) || '.webm';
-    cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
+// v4: audio answers are stored IN THE DATABASE (bytes), never on disk.
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 }, // ~3 minutes of webm/opus
+  fileFilter: (_req, file, cb) => {
+    const ok = file.mimetype.startsWith('audio/');
+    cb(ok ? null : (new Error('فایل صوتی مجاز نیست') as any), ok);
   },
 });
-const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } });
 
-// Check if assignment is still active (72h not passed)
-async function isAssignmentActive(requestId: string): Promise<boolean> {
-  const assignment = await prisma.assignment.findUnique({
-    where: { requestId },
+// Can a message be posted on this case right now?
+// - With FLAG_AUTO_CLOSE_72H on: legacy 72h rule applies.
+// - v4 default: member/admin can post while the case is open (PENDING_REVIEW /
+//   APPROVED / ASSIGNED); closed and rejected cases are read-only.
+async function canPost(requestId: string): Promise<boolean> {
+  const request = await prisma.request.findUnique({
+    where: { id: requestId },
+    include: { assignment: true },
   });
-  if (!assignment) return false;
-  if (assignment.status !== 'ACTIVE') return false;
-  return new Date() < assignment.expiresAt;
+  if (!request) return false;
+  if (request.status.startsWith('CLOSED') || request.status === 'REJECTED') return false;
+
+  if (FLAGS.autoClose72h) {
+    const a = request.assignment;
+    if (!a || a.status !== 'ACTIVE') return false;
+    return new Date() < a.expiresAt;
+  }
+  return true;
 }
 
-// POST /api/messages/:requestId - send message
+// POST /api/messages/:requestId - send message (member answer or admin)
 router.post('/:requestId', upload.single('voice'), async (req: AuthRequest, res) => {
   const { requestId } = req.params;
   const { content } = req.body;
 
-  // Verify access
+  // Verify access (server-side)
   const request = await prisma.request.findUnique({
     where: { id: requestId },
     include: { assignment: true },
   });
   if (!request) return res.status(404).json({ error: 'پرونده یافت نشد' });
 
-  // Access control
   if (req.userRole === 'MEMBER' && request.userId !== req.userId) {
     return res.status(403).json({ error: 'دسترسی مجاز نیست' });
   }
   if (req.userRole === 'MENTOR') {
+    if (!FLAGS.mentorAssignment) return res.status(403).json({ error: 'این بخش در نسخه تست فعال نیست' });
     if (!request.assignment || request.assignment.mentorId !== req.userId) {
       return res.status(403).json({ error: 'این پرونده به شما تخصیص نیافته است' });
     }
   }
+  if (req.userRole === 'ADMIN' && request.status.startsWith('CLOSED')) {
+    return res.status(403).json({ error: 'پرونده بسته شده است' });
+  }
 
-  // Check 72h expiry — server-side enforcement
-  const active = await isAssignmentActive(requestId);
-  if (!active) {
+  if (!(await canPost(requestId))) {
     return res.status(403).json({ error: 'زمان فعال پرونده به پایان رسیده. ارسال پیام ممکن نیست.' });
   }
 
@@ -62,11 +74,11 @@ router.post('/:requestId', upload.single('voice'), async (req: AuthRequest, res)
   if (req.file) {
     const att = await prisma.attachment.create({
       data: {
-        filename: req.file.filename,
-        originalName: req.file.originalname,
+        filename: `voice-${Date.now()}.webm`,
+        originalName: req.file.originalname || 'voice.webm',
         mimeType: req.file.mimetype,
         size: req.file.size,
-        path: req.file.path,
+        data: req.file.buffer,
         uploadedBy: req.userId!,
         requestId,
       },
@@ -88,6 +100,16 @@ router.post('/:requestId', upload.single('voice'), async (req: AuthRequest, res)
     include: { attachment: true },
   });
 
+  // v4: a member answer restarts the AI analysis round and sends the case
+  // back to the admin review queue. The response returns immediately.
+  if (req.userRole === 'MEMBER') {
+    await prisma.request.update({
+      where: { id: requestId },
+      data: { status: 'PENDING_REVIEW' },
+    });
+    startAnalysis(requestId);
+  }
+
   res.json(message);
 });
 
@@ -103,7 +125,7 @@ router.get('/:requestId', async (req: AuthRequest, res) => {
   if (req.userRole === 'MEMBER' && request.userId !== req.userId) {
     return res.status(403).json({ error: 'دسترسی مجاز نیست' });
   }
-  if (req.userRole === 'MENTOR' && (!request.assignment || request.assignment.mentorId !== req.userId)) {
+  if (req.userRole === 'MENTOR' && (!FLAGS.mentorAssignment || !request.assignment || request.assignment.mentorId !== req.userId)) {
     return res.status(403).json({ error: 'دسترسی مجاز نیست' });
   }
 
@@ -113,23 +135,6 @@ router.get('/:requestId', async (req: AuthRequest, res) => {
     orderBy: { createdAt: 'asc' },
   });
   res.json(messages);
-});
-
-// Retry failed message
-router.post('/:requestId/retry/:messageId', async (req: AuthRequest, res) => {
-  const { requestId, messageId } = req.params;
-  const msg = await prisma.message.findUnique({ where: { id: messageId } });
-  if (!msg || msg.requestId !== requestId) return res.status(404).json({ error: 'پیام یافت نشد' });
-  if (msg.status !== 'FAILED') return res.status(400).json({ error: 'این پیام نیاز به تلاش مجدد ندارد' });
-
-  const active = await isAssignmentActive(requestId);
-  if (!active) return res.status(403).json({ error: 'زمان فعال پرونده به پایان رسیده' });
-
-  const updated = await prisma.message.update({
-    where: { id: messageId },
-    data: { status: 'SENT' },
-  });
-  res.json(updated);
 });
 
 export default router;

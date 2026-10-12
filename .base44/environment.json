@@ -1,0 +1,17 @@
+{
+  "previewPort": 3000,
+  "healthPath": "/",
+  "startCommand": "docker compose -f docker-compose.base44.yml up -d",
+  "secrets": [
+    {
+      "name": "OPENAI_API_KEY",
+      "description": "کلید OpenAI از platform.openai.com — برای تحلیل و تبدیل گفتار فارسی. توجه: اعتبار کلید فعلی تمام شده (insufficient_quota) و باید شارژ شود.",
+      "requiredAtBoot": false
+    },
+    {
+      "name": "OPENAI_BASE_URL",
+      "description": "اختیاری — پیش‌فرض https://api.openai.com؛ برای پروکسی سازگار OpenAI مقدار بدهید.",
+      "requiredAtBoot": false
+    }
+  ]
+}

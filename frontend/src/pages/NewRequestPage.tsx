@@ -1,259 +1,159 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import Layout from '../components/Layout';
-import AudioRecorder from '../components/AudioRecorder';
+import { useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import client from '../api/client';
+import AudioRecorder from '../components/AudioRecorder';
+import AuthAudio from '../components/AuthAudio';
+
+type Step = 'input' | 'recorded' | 'transcribing' | 'confirm' | 'submitting';
 
 export default function NewRequestPage() {
-  const [mode, setMode] = useState<'choice' | 'voice' | 'text'>('choice');
-  const [text, setText] = useState('');
-  const [title, setTitle] = useState('');
-  const [voiceBlob, setVoiceBlob] = useState<Blob | null>(null);
-  const [transcribing, setTranscribing] = useState(false);
-  const [transcribed, setTranscribed] = useState(false);
-  const [transcribeMsg, setTranscribeMsg] = useState('');
-  const [consentText, setConsentText] = useState('');
-  const [consentVersion, setConsentVersion] = useState('1.0');
-  const [consentAccepted, setConsentAccepted] = useState(false);
-  const [contributionAmount, setContributionAmount] = useState(150000);
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const [step, setStep] = useState<Step>('input');
+  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+  const [text, setText] = useState('');
+  const [error, setError] = useState('');
+  const [hint, setHint] = useState('');
 
-  useEffect(() => {
-    client.get('/settings').then(res => {
-      setConsentText(res.data.consentText || '');
-      setConsentVersion(res.data.consentVersion || '1.0');
-      setContributionAmount(res.data.contributionAmount || 150000);
-    }).catch(() => {});
-    // Also get consent from the requests endpoint
-    client.get('/requests/consent').then(res => {
-      setConsentText(res.data.text || consentText);
-      setConsentVersion(res.data.version || consentVersion);
-    }).catch(() => {});
-  }, []);
+  const startText = () => {
+    setAudioBlob(null);
+    setStep('confirm');
+    setHint('');
+  };
 
-  const formatToman = (n: number) => n.toLocaleString('fa-IR') + ' تومان';
+  const onRecorded = (blob: Blob) => {
+    setAudioBlob(blob);
+    setStep('recorded');
+  };
 
-  // ضبط صدا ← تبدیل به متن ← نمایش و تأیید/ویرایش متن توسط فرد
-  const handleTranscribe = async () => {
-    if (!voiceBlob) return;
-    setTranscribing(true);
-    setTranscribeMsg('');
+  const transcribe = async () => {
+    if (!audioBlob) return;
+    setStep('transcribing');
+    setError('');
     try {
-      const fd = new FormData();
-      fd.append('audio', voiceBlob, 'voice.webm');
-      const res = await client.post('/ai/transcribe', fd, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      setText(res.data.text || '');
-      setTranscribed(true);
-    } catch (err: any) {
-      setTranscribeMsg(
-        (err.response?.data?.message || err.response?.data?.error || 'تبدیل انجام نشد') +
-        ' — می‌توانید متن را مستقیم بنویسید.'
-      );
-    } finally {
-      setTranscribing(false);
+      const form = new FormData();
+      form.append('audio', audioBlob, 'voice.webm');
+      const res = await client.post('/ai/transcribe', form);
+      setText(res.data.text);
+      setStep('confirm');
+      setHint('متن زیر را بررسی و اصلاح کن؛ فقط متن تأییدشده وارد پرونده می‌شود.');
+    } catch (e: any) {
+      setStep('recorded');
+      const status = e.response?.status;
+      if (status === 503) {
+        setError('سرویس تبدیل صدا به متن تنظیم نشده است. لطفاً متن نیاز را بنویسید.');
+      } else {
+        setError('تبدیل صدا به متن ناموفق بود. دوباره تلاش کنید یا متن را بنویسید.');
+      }
     }
   };
 
-  const handleSubmit = async () => {
-    if (!consentAccepted) {
-      setError('پذیرش فرم رضایت الزامی است');
-      return;
-    }
-    if (mode === 'text' && !text.trim()) {
-      setError('متن نیاز الزامی است');
-      return;
-    }
-    if (mode === 'voice' && !voiceBlob) {
-      setError('ابتدا باید ضبط کنید');
-      return;
-    }
+  const submit = async () => {
     if (!text.trim()) {
-      setError('متن نیاز الزامی است؛ صدا را به متن تبدیل کنید، بازبینی و تأیید کنید یا خودتان بنویسید.');
+      setError('متن نیاز خالی است');
       return;
     }
-
+    setStep('submitting');
     setError('');
-    setLoading(true);
-
     try {
-      const formData = new FormData();
-      if (mode === 'voice' && voiceBlob) {
-        formData.append('voice', voiceBlob, 'voice.webm');
-      }
-      formData.append('description', text);
-      formData.append('title', title);
-      formData.append('consentAccepted', 'true');
-      formData.append('consentVersion', consentVersion);
-
-      await client.post('/requests', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      navigate('/dashboard');
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'خطا در ثبت درخواست');
-    } finally {
-      setLoading(false);
+      const form = new FormData();
+      form.append('description', text.trim());
+      if (audioBlob) form.append('voice', audioBlob, 'voice.webm');
+      const res = await client.post('/requests', form);
+      navigate(`/case/${res.data.id}`, { replace: true });
+    } catch (e: any) {
+      setStep('confirm');
+      setError(e.response?.data?.error || 'ثبت پرونده ناموفق بود');
     }
   };
 
   return (
-    <Layout>
-      <div className="max-w-2xl mx-auto px-4 py-6">
-        <h1 className="text-2xl font-bold mb-6">ثبت نیاز جدید</h1>
+    <div className="min-h-screen bg-seraj-bg">
+      <header className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+        <Link to="/dashboard" className="text-seraj-muted text-sm touch-target">بازگشت</Link>
+        <h1 className="font-bold">ثبت نیاز جدید</h1>
+        <span className="w-12" />
+      </header>
 
-        {mode === 'choice' && (
-          <div className="space-y-4">
-            <button
-              onClick={() => setMode('voice')}
-              className="w-full bg-seraj-card rounded-2xl p-6 text-center hover:bg-white/5 transition"
-            >
-              <div className="w-16 h-16 rounded-full bg-seraj-orange/20 flex items-center justify-center mx-auto mb-3">
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#F69A46" strokeWidth="2">
-                  <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
-                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                  <line x1="12" y1="19" x2="12" y2="22" />
-                </svg>
-              </div>
-              <p className="font-bold">ضبط صدا</p>
-              <p className="text-sm text-seraj-muted mt-1">نیازتان را با صدا بیان کنید</p>
-            </button>
+      <main className="max-w-lg mx-auto px-4 py-6 pb-24">
+        {hint && <p className="text-seraj-orange text-sm mb-4 text-center">{hint}</p>}
 
+        {step === 'input' && (
+          <div className="flex flex-col items-center gap-6">
+            <p className="text-seraj-muted text-center leading-relaxed">
+              نیاز خود را با صدا بگو (حداکثر ۳ دقیقه) یا بنویس.
+            </p>
+            <AudioRecorder onRecorded={onRecorded} />
             <button
-              onClick={() => setMode('text')}
-              className="w-full bg-seraj-card rounded-2xl p-6 text-center hover:bg-white/5 transition"
+              onClick={startText}
+              className="text-seraj-orange text-sm underline touch-target px-4"
             >
-              <div className="w-16 h-16 rounded-full bg-seraj-orange/20 flex items-center justify-center mx-auto mb-3">
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#F69A46" strokeWidth="2">
-                  <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
-                </svg>
-              </div>
-              <p className="font-bold">نوشتن متن</p>
-              <p className="text-sm text-seraj-muted mt-1">نیازتان را به‌صورت متنی بیان کنید</p>
+              ترجیح می‌دهم بنویسم
             </button>
           </div>
         )}
 
-        {mode === 'voice' && (
-          <div className="bg-seraj-card rounded-2xl p-6">
-            <h2 className="font-bold mb-4">ضبط صدا</h2>
-            <AudioRecorder onRecorded={(blob) => { setVoiceBlob(blob); setTranscribed(false); }} />
-            {voiceBlob && (
-              <div className="mt-4 text-center">
-                <p className="text-green-400 text-sm mb-2">✓ صدا ضبط شد</p>
-                <div className="flex items-center justify-center gap-3">
-                  <button
-                    onClick={handleTranscribe}
-                    disabled={transcribing}
-                    className="bg-seraj-orange text-seraj-bg px-4 py-2 rounded-xl text-sm font-bold disabled:opacity-50 touch-target"
-                  >
-                    {transcribing ? 'در حال تبدیل...' : 'تبدیل به متن'}
-                  </button>
-                  <button
-                    onClick={() => { setVoiceBlob(null); setTranscribed(false); setTranscribeMsg(''); }}
-                    className="text-seraj-muted text-sm underline"
-                  >
-                    ضبط دوباره
-                  </button>
-                </div>
-              </div>
+        {step === 'recorded' && (
+          <div className="flex flex-col items-center gap-6">
+            <p className="text-seraj-muted text-center">صدای شما آماده است. بشنوید و تأیید کنید.</p>
+            {audioBlob && <AuthAudio blob={audioBlob} />}
+            <div className="flex flex-col gap-3 w-full max-w-xs">
+              <button
+                onClick={transcribe}
+                className="w-full py-4 bg-seraj-orange text-seraj-bg rounded-xl font-bold touch-target"
+              >
+                تبدیل به متن و ادامه
+              </button>
+              <button
+                onClick={() => {
+                  setAudioBlob(null);
+                  setStep('input');
+                }}
+                className="w-full py-3 bg-seraj-card border border-gray-700 rounded-xl touch-target"
+              >
+                ضبط دوباره
+              </button>
+            </div>
+          </div>
+        )}
+
+        {step === 'transcribing' && (
+          <div className="flex flex-col items-center gap-4 py-16">
+            <div className="w-10 h-10 border-2 border-seraj-orange border-t-transparent rounded-full animate-spin" />
+            <p className="text-seraj-muted">در حال تبدیل صدا به متن...</p>
+          </div>
+        )}
+
+        {step === 'confirm' && (
+          <div className="flex flex-col gap-4">
+            <p className="text-seraj-muted text-sm leading-relaxed">
+              قدم بعدی: متن را بخوان، اصلاح کن و تأیید کن. فقط متن تأییدشده وارد پرونده می‌شود. لطفاً کد ملی و شماره حساب ننویس.
+            </p>
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              rows={8}
+              placeholder="متن نیاز شما..."
+              className="w-full px-4 py-3 bg-seraj-card border border-gray-700 rounded-xl text-seraj-text leading-relaxed"
+            />
+            {error && <p className="text-red-400 text-sm">{error}</p>}
+            <button
+              onClick={submit}
+              disabled={!text.trim() || (step as string) === 'submitting'}
+              className="w-full py-4 bg-seraj-orange text-seraj-bg rounded-xl font-bold touch-target disabled:opacity-50"
+            >
+              {(step as string) === 'submitting' ? 'در حال ثبت...' : 'تأیید و ثبت پرونده'}
+            </button>
+            {step === 'confirm' && !audioBlob && (
+              <button
+                onClick={() => setStep('input')}
+                className="text-seraj-muted text-sm underline touch-target"
+              >
+                ضبط صدا به‌جای نوشتن
+              </button>
             )}
-            {transcribeMsg && <p className="text-yellow-400 text-sm mt-3">{transcribeMsg}</p>}
-            <div className="mt-4">
-              <label className="text-sm text-seraj-muted mb-1 block">
-                متن نیاز (بازبینی و ویرایش کنید، سپس تأیید کنید)
-              </label>
-              <textarea
-                value={text}
-                onChange={e => setText(e.target.value)}
-                className="w-full bg-seraj-bg border border-white/10 rounded-xl px-4 py-3 text-seraj-text focus:border-seraj-orange focus:outline-none min-h-[120px]"
-                placeholder="با «تبدیل به متن» این بخش پر می‌شود؛ می‌توانید مستقیم هم بنویسید"
-              />
-              {transcribed && text.trim() && (
-                <p className="text-green-400 text-xs mt-1">✓ متن تبدیل‌شده آماده است؛ پس از بازبینی، درخواست را ارسال کنید.</p>
-              )}
-            </div>
-            <button onClick={() => setMode('choice')} className="text-seraj-muted text-sm mt-4 underline">
-              تغییر روش
-            </button>
           </div>
         )}
-
-        {mode === 'text' && (
-          <div className="bg-seraj-card rounded-2xl p-6">
-            <h2 className="font-bold mb-4">نوشتن متن</h2>
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm text-seraj-muted mb-1 block">عنوان (اختیاری)</label>
-                <input
-                  type="text"
-                  value={title}
-                  onChange={e => setTitle(e.target.value)}
-                  className="w-full bg-seraj-bg border border-white/10 rounded-xl px-4 py-3 text-seraj-text focus:border-seraj-orange focus:outline-none"
-                  placeholder="عنوان کوتاه نیاز"
-                />
-              </div>
-              <div>
-                <label className="text-sm text-seraj-muted mb-1 block">شرح نیاز</label>
-                <textarea
-                  value={text}
-                  onChange={e => setText(e.target.value)}
-                  className="w-full bg-seraj-bg border border-white/10 rounded-xl px-4 py-3 text-seraj-text focus:border-seraj-orange focus:outline-none min-h-[160px]"
-                  placeholder="نیازتان را کامل توضیح دهید..."
-                  required
-                />
-              </div>
-            </div>
-            <button onClick={() => setMode('choice')} className="text-seraj-muted text-sm mt-4 underline">
-              تغییر روش
-            </button>
-          </div>
-        )}
-
-        {(mode === 'voice' || mode === 'text') && (
-          <>
-            {/* Contribution info */}
-            <div className="bg-seraj-card rounded-2xl p-4 mt-4">
-              <h3 className="font-bold text-sm mb-2">سهم مشارکت</h3>
-              <p className="text-seraj-orange font-bold text-lg">{formatToman(contributionAmount)}</p>
-              <p className="text-seraj-muted text-xs mt-1">
-                این مشارکت، قدم اولیه شما برای آغاز و پیگیری فرایند تا پایان است.
-              </p>
-              <p className="text-seraj-muted text-xs mt-1">
-                این پرداخت به منتور نیست و خرید مشاوره تخصصی محسوب نمی‌شود. به‌صورت کمک بلاعوض به صندوق پشتیبانی است.
-              </p>
-            </div>
-
-            {/* Consent form */}
-            <div className="bg-seraj-card rounded-2xl p-4 mt-4">
-              <h3 className="font-bold text-sm mb-2">فرم رضایت آگاهانه</h3>
-              <p className="text-seraj-muted text-sm leading-relaxed mb-3">{consentText}</p>
-              <label className="flex items-start gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={consentAccepted}
-                  onChange={e => setConsentAccepted(e.target.checked)}
-                  className="mt-1 w-5 h-5 accent-seraj-orange"
-                />
-                <span className="text-sm">می‌پذیرم و تأیید می‌کنم</span>
-              </label>
-            </div>
-
-            {error && <p className="text-red-400 text-sm mt-4">{error}</p>}
-
-            <button
-              onClick={handleSubmit}
-              disabled={loading}
-              className="w-full bg-seraj-orange text-seraj-bg rounded-xl py-3 font-bold mt-4 disabled:opacity-50 touch-target"
-            >
-              {loading ? 'در حال ارسال...' : 'ارسال درخواست'}
-            </button>
-          </>
-        )}
-      </div>
-    </Layout>
+      </main>
+    </div>
   );
 }
